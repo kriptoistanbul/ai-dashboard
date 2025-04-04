@@ -9,11 +9,11 @@ import datetime
 import io
 import re
 
-# Set page title
+# Set page title and layout
 st.set_page_config(page_title="SEO Position Tracking Dashboard", layout="wide")
 st.title("SEO Position Tracking Dashboard")
 
-# Function to get domain from URL
+# Function to extract domain from URL
 def get_domain(url):
     """Extract domain from URL"""
     try:
@@ -37,20 +37,16 @@ def prepare_data(df):
         df['domain'] = None
     
     # Convert date columns to datetime
-    date_columns = ['Time', 'date/time']
+    date_columns = ['Time', 'date/time', 'date']
     for col in date_columns:
         if col in df.columns:
-            try:
-                df[col] = pd.to_datetime(df[col], errors='coerce')
-            except:
-                pass
+            df[col] = pd.to_datetime(df[col], errors='coerce')
     
     # Add date column (without time)
     if 'Time' in df.columns:
-        df['date'] = pd.NaT
-        mask = df['Time'].notna()
-        if mask.any():
-            df.loc[mask, 'date'] = df.loc[mask, 'Time'].dt.date
+        df['date'] = df['Time'].dt.date
+    elif 'date/time' in df.columns:
+        df['date'] = df['date/time'].dt.date
     
     return df
 
