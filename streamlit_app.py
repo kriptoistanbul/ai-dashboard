@@ -7,7 +7,6 @@ import plotly.graph_objects as go
 import numpy as np
 import re
 import io
-import base64
 
 # Page configuration
 st.set_page_config(page_title="SEO Position Tracker", page_icon="📈", layout="wide")
@@ -195,18 +194,10 @@ def load_data_from_gsheet(url):
 def to_excel(df):
     """Convert DataFrame to Excel bytes for downloading"""
     output = io.BytesIO()
-    writer = pd.ExcelWriter(output, engine='xlsxwriter')
-    df.to_excel(writer, sheet_name='Sheet1', index=False)
-    writer.save()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False)
     processed_data = output.getvalue()
     return processed_data
-
-def get_table_download_link(df, filename="data.xlsx", text="Download Excel file"):
-    """Generates a link to download the provided dataframe as an Excel file"""
-    excel_file = to_excel(df)
-    b64 = base64.b64encode(excel_file).decode()
-    href = f'<a href="data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,{b64}" download="{filename}">{text}</a>'
-    return href
 
 # Initialize session state for data storage
 if 'data' not in st.session_state:
@@ -561,7 +552,7 @@ with tab2:
                 keyword_volume.columns = ['Keyword', 'Number of URLs']
                 
                 # Display the table
-                st.dataframe(keyword_volume.head(10), use_container_width=True)
+                st.dataframe(keyword_volume.head(10))
             else:
                 st.info("No keyword or URL data available.")
         
@@ -574,7 +565,7 @@ with tab2:
                 domain_freq.columns = ['Domain', 'Frequency']
                 
                 # Display the table
-                st.dataframe(domain_freq.head(10), use_container_width=True)
+                st.dataframe(domain_freq.head(10))
             else:
                 st.info("No domain data available.")
 
@@ -789,7 +780,7 @@ with tab3:
                     # Round average position to 2 decimal places
                     display_df['Average Position'] = display_df['Average Position'].round(2)
                     
-                    st.dataframe(display_df, use_container_width=True)
+                    st.dataframe(display_df)
 
 # Tab 4: Domain Analysis
 with tab4:
@@ -972,7 +963,7 @@ with tab4:
                     # Round average position to 2 decimal places
                     display_df['Average Position'] = display_df['Average Position'].round(2)
                     
-                    st.dataframe(display_df, use_container_width=True)
+                    st.dataframe(display_df)
 
 # Tab 5: URL Comparison
 with tab5:
@@ -1194,7 +1185,7 @@ with tab5:
                     display_df.columns = ['URL', 'Average Position', 'Best Position', 'Worst Position', 'Keywords Count']
                     display_df['Average Position'] = display_df['Average Position'].round(2)
                     
-                    st.dataframe(display_df, use_container_width=True)
+                    st.dataframe(display_df)
 
 # Tab 6: Time Comparison
 with tab6:
@@ -1397,48 +1388,67 @@ with tab6:
                 end_pos = end_positions.get(url, None)
                 domain = get_domain(url)
                 
+                # Only include if at least one position exists
                 if start_pos is not None or end_pos is not None:
-                    change_data = {
-                        'URL': url,
-                        'Domain': domain,
-                        'Start Position': start_pos if start_pos is not None else "N/A",
-                        'End Position': end_pos if end_pos is not None else "N/A"
-                    }
+                    # Display "N/A" for missing values
+                    start_pos_display = start_pos if start_pos is not None else "N/A"
+                    end_pos_display = end_pos if end_pos is not None else "N/A"
+                    
+                    # Default values
+                    change_text = "N/A"
+                    status = "unknown"
+                    change_value = 0
                     
                     # Calculate change text
                     if start_pos is not None and end_pos is not None:
                         change = end_pos - start_pos
                         if change < 0:
-                            change_data['Change'] = f"↑ {abs(change)} (improved)"
-                            change_data['status'] = 'improved'
+                            change_text = f"↑ {abs(change)} (improved)"
+                            status = 'improved'
                         elif change > 0:
-                            change_data['Change'] = f"↓ {change} (declined)"
-                            change_data['status'] = 'declined'
+                            change_text = f"↓ {change} (declined)"
+                            status = 'declined'
                         else:
-                            change_data['Change'] = "No change"
-                            change_data['status'] = 'unchanged'
-                        change_data['change_value'] = abs(change)
+                            change_text = "No change"
+                            status = 'unchanged'
+                        change_value = abs(change)
                     else:
                         if start_pos is None:
-                            change_data['Change'] = "New"
-                            change_data['status'] = 'new'
+                            change_text = "New"
+                            status = 'new'
                         else:
-                            change_data['Change'] = "Dropped"
-                            change_data['status'] = 'dropped'
-                        change_data['change_value'] = 0
+                            change_text = "Dropped"
+                            status = 'dropped'
                     
-                    position_changes.append(change_data)
+                    position_changes.append({
+                        'URL': url,
+                        'Domain': domain if domain else "",
+                        'Start Position': start_pos_display,
+                        'End Position': end_pos_display,
+                        'Change': change_text,
+                        'Status': status,
+                        'Change Value': change_value
+                    })
             
-            # Sort by status and change value
-            position_changes = sorted(
-                position_changes,
-                key=lambda x: (
-                    0 if x.get('status') in ('improved', 'declined') else
-                    1 if x.get('status') in ('new', 'dropped') else 2,
-                    x.get('change_value', 0)
-                ),
-                reverse=True
-            )
+            # Sort changes by status and change value
+            def sort_key(x):
+                # First by status category
+                status_order = {
+                    'improved': 0,
+                    'declined': 1,
+                    'new': 2,
+                    'dropped': 3,
+                    'unchanged': 4,
+                    'unknown': 5
+                }
+                status_value = status_order.get(x.get('Status', 'unknown'), 6)
+                
+                # Then by change value (descending)
+                change_value = x.get('Change Value', 0)
+                
+                return (status_value, -change_value)
+            
+            position_changes.sort(key=sort_key)
             
             # Display tables
             table_col1, table_col2 = st.columns(2)
@@ -1448,7 +1458,8 @@ with tab6:
                 st.write("Sorted by position (best positions first)")
                 
                 if start_urls_list:
-                    st.dataframe(pd.DataFrame(start_urls_list), use_container_width=True)
+                    start_df = pd.DataFrame(start_urls_list)
+                    st.dataframe(start_df)
                 else:
                     st.info("No URLs found for start date.")
             
@@ -1457,7 +1468,8 @@ with tab6:
                 st.write("Sorted by position (best positions first)")
                 
                 if end_urls_list:
-                    st.dataframe(pd.DataFrame(end_urls_list), use_container_width=True)
+                    end_df = pd.DataFrame(end_urls_list)
+                    st.dataframe(end_df)
                 else:
                     st.info("No URLs found for end date.")
             
@@ -1466,26 +1478,21 @@ with tab6:
             st.write("All URLs with their position changes")
             
             if position_changes:
-                # Create DataFrame for display
                 changes_df = pd.DataFrame(position_changes)
                 
-                # Apply conditional styling
-                def highlight_changes(val):
-                    """Apply color highlighting based on change status"""
-                    if 'improved' in str(val).lower():
-                        return 'background-color: #d4edda; color: #155724'
-                    elif 'declined' in str(val).lower():
-                        return 'background-color: #fff3cd; color: #856404'
-                    elif 'new' == str(val).lower():
-                        return 'background-color: #cce5ff; color: #004085'
-                    elif 'dropped' == str(val).lower():
-                        return 'background-color: #f8d7da; color: #721c24'
-                    return ''
+                # Remove unnecessary columns for display
+                if 'Status' in changes_df.columns:
+                    changes_df = changes_df.drop(columns=['Status', 'Change Value'])
                 
-                # Display the table
-                st.dataframe(
-                    changes_df.style.apply(lambda x: [highlight_changes(x['Change'])] * len(x), axis=1),
-                    use_container_width=True
-                )
+                st.dataframe(changes_df)
+                
+                # Display a summary of changes
+                improved = sum(1 for x in position_changes if x.get('Status') == 'improved')
+                declined = sum(1 for x in position_changes if x.get('Status') == 'declined')
+                new = sum(1 for x in position_changes if x.get('Status') == 'new')
+                dropped = sum(1 for x in position_changes if x.get('Status') == 'dropped')
+                unchanged = sum(1 for x in position_changes if x.get('Status') == 'unchanged')
+                
+                st.write(f"**Summary:** {improved} improved, {declined} declined, {new} new, {dropped} dropped, {unchanged} unchanged")
             else:
                 st.info("No position changes to display.")
