@@ -3137,12 +3137,6 @@ if not end_data.empty:
     else:
         # No duplicates to remove
         print(f"No duplicates found in end data ({len(end_data)} rows)")
-            print(f"After removing duplicates, start data has {len(start_data)} rows")
-        
-        if not end_data.empty:
-            # Drop duplicates, keeping only the first occurrence for each URL
-            end_data = end_data.drop_duplicates(subset=['Results'])
-            print(f"After removing duplicates, end data has {len(end_data)} rows")
         
         # ======== PREPARE START DATE DATA ========
         start_urls = []
