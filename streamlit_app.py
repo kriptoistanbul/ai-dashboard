@@ -9,6 +9,12 @@ import io
 import re
 import datetime
 from datetime import datetime
+import requests
+
+# Google Sheet Configuration
+SHEET_ID = "1Z8S-lJygDcuB3gs120EoXLVMtZzgp7HQrjtNkkOqJQs"
+SHEET_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/edit#gid=0"
+SHEET_CSV_EXPORT_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid=0"
 
 # Set page configuration
 st.set_page_config(
@@ -203,6 +209,27 @@ def apply_domain_filter(df, domain):
     
     return df[df['domain'] == domain]
 
+def load_data_from_sheet():
+    """Load data from Google Sheet CSV export"""
+    try:
+        # Use caching to prevent reloading the data on every UI interaction
+        @st.cache_data(ttl=300)
+        def fetch_sheet_data():
+            try:
+                # Fetch CSV data from the export URL
+                return pd.read_csv(SHEET_CSV_EXPORT_URL)
+            except Exception as e:
+                st.warning(f"Could not connect to Google Sheet: {e}")
+                st.info("Using sample data instead.")
+                
+                # Generate sample data if connection fails
+                return generate_sample_data()
+        
+        return fetch_sheet_data()
+    except Exception as e:
+        st.error(f"Error loading data: {e}")
+        return pd.DataFrame()
+
 def generate_sample_data():
     """Generate sample SEO position data for demonstration"""
     # Create sample keywords, domains, and dates
@@ -240,9 +267,49 @@ def generate_sample_data():
 def main():
     st.markdown('<h1 class="main-header">Advanced SEO Position Tracker</h1>', unsafe_allow_html=True)
     
+    # Attempt to load data from Google Sheet
+    with st.spinner("Loading data from Google Sheet..."):
+        df = load_data_from_sheet()
+        
+        if not df.empty:
+            # Process the data
+            st.info(f"Processing data from: {SHEET_URL}")
+            processed_df = prepare_data(df)
+            
+            # Store in session state
+            st.session_state.data = df
+            st.session_state.processed_data = processed_df
+            
+            # Extract unique values for filters
+            if 'Keyword' in processed_df.columns:
+                st.session_state.keywords = ["All Keywords"] + sorted(processed_df['Keyword'].unique().tolist())
+            else:
+                st.session_state.keywords = ["No keywords available"]
+            
+            if 'date' in processed_df.columns:
+                dates = sorted(processed_df['date'].dropna().unique())
+                st.session_state.dates = [d.strftime('%Y-%m-%d') if isinstance(d, datetime.date) else str(d).split(' ')[0] 
+                              for d in dates]
+            else:
+                st.session_state.dates = []
+            
+            if 'Results' in processed_df.columns:
+                st.session_state.urls = sorted(processed_df['Results'].dropna().unique().tolist())
+            else:
+                st.session_state.urls = []
+            
+            # Get summary statistics
+            st.session_state.summary = {
+                'total_keywords': processed_df['Keyword'].nunique() if 'Keyword' in processed_df.columns else 0,
+                'total_domains': processed_df['domain'].nunique() if 'domain' in processed_df.columns else 0,
+                'total_urls': processed_df['Results'].nunique() if 'Results' in processed_df.columns else 0,
+                'date_range': get_date_range(processed_df)
+            }
+            
+            st.success(f"Data loaded and processed successfully! {len(processed_df)} rows found.")
+    
     # Create tabs for different sections
     tabs = st.tabs([
-        "📤 Upload Data", 
         "📊 Dashboard", 
         "🔑 Keyword Analysis", 
         "🌐 Domain Analysis", 
@@ -250,7 +317,7 @@ def main():
         "⏱️ Time Comparison"
     ])
     
-    # Initialize session state for data storage
+    # Initialize session state for data storage if not already done
     if 'data' not in st.session_state:
         st.session_state.data = None
     if 'processed_data' not in st.session_state:
@@ -264,122 +331,25 @@ def main():
     if 'summary' not in st.session_state:
         st.session_state.summary = {}
     
-    # Tab 1: Upload Data
-    with tabs[0]:
-        st.markdown('<h2 class="section-header">Upload Excel Data</h2>', unsafe_allow_html=True)
-        
-        col1, col2 = st.columns([1, 1])
-        
-        with col1:
-            st.info("Your Excel file should contain columns for Keyword, Results (URLs), Position, and Time.")
-            
-            data_source = st.radio(
-                "Select Data Source",
-                ["Upload Excel File", "Use Sample Data"],
-                index=0
-            )
-            
-            if data_source == "Upload Excel File":
-                uploaded_file = st.file_uploader("Select Excel File", type=['xlsx', 'xls', 'csv'])
-                
-                if uploaded_file is not None:
-                    try:
-                        # Determine file type and read accordingly
-                        if uploaded_file.name.endswith('.csv'):
-                            df = pd.read_csv(uploaded_file)
-                        else:
-                            df = pd.read_excel(uploaded_file)
-                        
-                        st.session_state.data = df
-                        
-                        # Process the data
-                        with st.spinner("Processing data..."):
-                            processed_df = prepare_data(df)
-                            st.session_state.processed_data = processed_df
-                            
-                            # Extract unique values for filters
-                            if 'Keyword' in processed_df.columns:
-                                st.session_state.keywords = ["All Keywords"] + sorted(processed_df['Keyword'].unique().tolist())
-                            
-                            if 'date' in processed_df.columns:
-                                dates = sorted(processed_df['date'].dropna().unique())
-                                st.session_state.dates = [d.strftime('%Y-%m-%d') if isinstance(d, datetime.date) else str(d).split(' ')[0] 
-                                              for d in dates]
-                            
-                            if 'Results' in processed_df.columns:
-                                st.session_state.urls = sorted(processed_df['Results'].dropna().unique().tolist())
-                            
-                            # Get summary statistics
-                            st.session_state.summary = {
-                                'total_keywords': processed_df['Keyword'].nunique() if 'Keyword' in processed_df.columns else 0,
-                                'total_domains': processed_df['domain'].nunique() if 'domain' in processed_df.columns else 0,
-                                'total_urls': processed_df['Results'].nunique() if 'Results' in processed_df.columns else 0,
-                                'date_range': get_date_range(processed_df)
-                            }
-                        
-                        st.success(f"Data loaded and processed successfully! {len(processed_df)} rows found.")
-                    
-                    except Exception as e:
-                        st.error(f"Error processing file: {str(e)}")
-            
-            else:  # Use Sample Data
-                with st.spinner("Generating sample data..."):
-                    df = generate_sample_data()
-                    
-                    st.session_state.data = df
-                    
-                    # Process the data
-                    processed_df = prepare_data(df)
-                    st.session_state.processed_data = processed_df
-                    
-                    # Extract unique values for filters
-                    if 'Keyword' in processed_df.columns:
-                        st.session_state.keywords = ["All Keywords"] + sorted(processed_df['Keyword'].unique().tolist())
-                    
-                    if 'date' in processed_df.columns:
-                        dates = sorted(processed_df['date'].dropna().unique())
-                        st.session_state.dates = [d.strftime('%Y-%m-%d') if isinstance(d, datetime.date) else str(d).split(' ')[0] 
-                                      for d in dates]
-                    
-                    if 'Results' in processed_df.columns:
-                        st.session_state.urls = sorted(processed_df['Results'].dropna().unique().tolist())
-                    
-                    # Get summary statistics
-                    st.session_state.summary = {
-                        'total_keywords': processed_df['Keyword'].nunique() if 'Keyword' in processed_df.columns else 0,
-                        'total_domains': processed_df['domain'].nunique() if 'domain' in processed_df.columns else 0,
-                        'total_urls': processed_df['Results'].nunique() if 'Results' in processed_df.columns else 0,
-                        'date_range': get_date_range(processed_df)
-                    }
-                    
-                    st.success(f"Sample data generated! {len(processed_df)} rows created.")
-        
-        with col2:
-            if st.session_state.processed_data is not None:
-                st.markdown('<h3>Data Preview</h3>', unsafe_allow_html=True)
-                st.dataframe(st.session_state.processed_data.head(10), use_container_width=True)
-                
-                st.markdown('<h3>Data Summary</h3>', unsafe_allow_html=True)
-                summary_col1, summary_col2 = st.columns(2)
-                
-                with summary_col1:
-                    st.metric("Total Keywords", st.session_state.summary.get('total_keywords', 0))
-                    st.metric("Total Domains", st.session_state.summary.get('total_domains', 0))
-                
-                with summary_col2:
-                    st.metric("Total URLs", st.session_state.summary.get('total_urls', 0))
-                    date_range = st.session_state.summary.get('date_range', ["N/A", "N/A"])
-                    st.metric("Date Range", f"{date_range[0]} to {date_range[1]}")
-    
-    # Check if we have data before showing the other tabs
+    # Check if we have data before showing the tabs
     if st.session_state.processed_data is None:
-        for i in range(1, 6):
-            with tabs[i]:
-                st.info("Please upload or generate data first in the 'Upload Data' tab.")
+        st.error("No data available. Please check your Google Sheet URL or try again later.")
         return
     
-    # Tab 2: Dashboard
-    with tabs[1]:
+    # Display data summary
+    st.sidebar.header("Data Summary")
+    st.sidebar.metric("Total Keywords", st.session_state.summary.get('total_keywords', 0))
+    st.sidebar.metric("Total Domains", st.session_state.summary.get('total_domains', 0))
+    st.sidebar.metric("Total URLs", st.session_state.summary.get('total_urls', 0))
+    date_range = st.session_state.summary.get('date_range', ["N/A", "N/A"])
+    st.sidebar.metric("Date Range", f"{date_range[0]} to {date_range[1]}")
+    
+    # Display data preview
+    if st.sidebar.checkbox("Show Data Preview"):
+        st.sidebar.dataframe(st.session_state.processed_data.head(10), use_container_width=True)
+    
+    # Tab 1: Dashboard
+    with tabs[0]:
         st.markdown('<h2 class="section-header">SEO Position Tracking Dashboard</h2>', unsafe_allow_html=True)
         
         # Filters for dashboard
@@ -566,8 +536,8 @@ def main():
                     else:
                         st.error("Domain data not available")
     
-    # Tab 3: Keyword Analysis
-    with tabs[2]:
+    # Tab 2: Keyword Analysis
+    with tabs[1]:
         st.markdown('<h2 class="section-header">Keyword Analysis</h2>', unsafe_allow_html=True)
         
         # Filters for keyword analysis
@@ -772,8 +742,8 @@ def main():
                 else:
                     st.error("Domain and Position data not available")
     
-    # Tab 4: Domain Analysis
-    with tabs[3]:
+    # Tab 3: Domain Analysis
+    with tabs[2]:
         st.markdown('<h2 class="section-header">Domain Analysis</h2>', unsafe_allow_html=True)
         
         # Filters for domain analysis
@@ -971,8 +941,8 @@ def main():
                 else:
                     st.error("Keyword and Position data not available")
     
-    # Tab 5: URL Comparison
-    with tabs[4]:
+    # Tab 4: URL Comparison
+    with tabs[3]:
         st.markdown('<h2 class="section-header">URL Comparison</h2>', unsafe_allow_html=True)
         
         # Filters for URL comparison
@@ -1208,8 +1178,8 @@ def main():
                 else:
                     st.error("URL performance data not available")
     
-    # Tab 6: Time Comparison
-    with tabs[5]:
+    # Tab 5: Time Comparison
+    with tabs[4]:
         st.markdown('<h2 class="section-header">Time Comparison</h2>', unsafe_allow_html=True)
         
         # Filters for time comparison
