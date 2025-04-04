@@ -65,6 +65,47 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# Helper functions for date handling
+def safe_format_date(date_value):
+    """Safely format any date value to a string, handling any data type"""
+    if date_value is None:
+        return ""
+    
+    try:
+        if isinstance(date_value, datetime.date) or isinstance(date_value, datetime.datetime):
+            return date_value.strftime('%Y-%m-%d')
+        elif isinstance(date_value, str):
+            # Try to extract just the date part from string
+            parts = date_value.split(' ')
+            if len(parts) > 0:
+                return parts[0]
+            return date_value
+        elif pd.isna(date_value):  # Handle NaN, NaT
+            return ""
+        else:
+            # For any other type, convert to string safely
+            return str(date_value)
+    except Exception as e:
+        # If all else fails, return empty string
+        return ""
+
+def get_safe_date_strings(dates_series):
+    """Safely convert a series of dates to formatted strings"""
+    if dates_series is None or len(dates_series) == 0:
+        return []
+    
+    date_strings = []
+    for d in dates_series:
+        try:
+            date_str = safe_format_date(d)
+            if date_str:  # Only add non-empty strings
+                date_strings.append(date_str)
+        except:
+            # Skip any date that causes an error
+            pass
+    
+    return sorted(date_strings) if date_strings else []
+
 # Helper functions
 def get_domain(url):
     """Extract domain from URL"""
@@ -261,13 +302,15 @@ def apply_position_filter(df, position_min=None, position_max=None):
 
 def apply_keyword_filter(df, keyword):
     """Apply keyword filter to DataFrame"""
-    if not keyword or 'Keyword' not in df.columns:
+    # Apply keyword filter
+    if not keyword or 'Keyword' not in df.columns or keyword == "All Keywords":
         return df
     
-    if keyword == "All Keywords":
+    try:
+        return df[df['Keyword'] == keyword]
+    except Exception as e:
+        st.warning(f"Error filtering by keyword: {e}")
         return df
-    
-    return df[df['Keyword'] == keyword]
 
 def apply_domain_filter(df, domain):
     """Apply domain filter to DataFrame"""
@@ -721,12 +764,16 @@ def main():
                 st.markdown(f"<h3>Available Dates for '{selected_keyword}'</h3>", unsafe_allow_html=True)
                 
                 if 'date' in df.columns:
-                    dates = sorted(df['date'].dropna().unique())
-                    date_str = [d.strftime('%Y-%m-%d') if isinstance(d, datetime.date) else str(d).split(' ')[0] 
-                              for d in dates]
-                    
-                    date_text = ", ".join(date_str)
-                    st.info(f"Data available for dates: {date_text}")
+                    try:
+                        valid_dates = df['date'].dropna().unique()
+                        date_str = get_safe_date_strings(valid_dates)
+                        
+                        date_text = ", ".join(date_str)
+                        st.info(f"Data available for dates: {date_text}")
+                    except Exception as e:
+                        st.warning(f"Error displaying dates: {e}")
+                        # Just display the count
+                        st.info(f"Data available for {df['date'].nunique()} unique dates")
                 
                 # Create keyword analysis visualizations
                 kw_col1, kw_col2 = st.columns(2)
@@ -1166,48 +1213,54 @@ def main():
                     st.markdown('<h3>URL Performance by Keyword</h3>', unsafe_allow_html=True)
                     
                     if 'Keyword' in url_df.columns and 'Position' in url_df.columns:
-                        # Get top 5 keywords by frequency across these URLs
-                        top_keywords = url_df['Keyword'].value_counts().head(5).index.tolist()
-                        
-                        # For each keyword, get position by URL
-                        keyword_comparison_data = []
-                        
-                        for keyword in top_keywords:
-                            keyword_data = url_df[url_df['Keyword'] == keyword]
+                        try:
+                            # Get top 5 keywords by frequency across these URLs
+                            top_keywords = url_df['Keyword'].value_counts().head(5).index.tolist()
                             
-                            for url in selected_urls:
-                                url_keyword_data = keyword_data[keyword_data['Results'] == url]
+                            # For each keyword, get position by URL
+                            keyword_comparison_data = []
+                            
+                            for keyword in top_keywords:
+                                if keyword is not None:  # Only process non-None keywords
+                                    keyword_data = url_df[url_df['Keyword'] == keyword]
+                                    
+                                    for url in selected_urls:
+                                        if url is not None:  # Only process non-None URLs
+                                            url_keyword_data = keyword_data[keyword_data['Results'] == url]
+                                            
+                                            if not url_keyword_data.empty:
+                                                keyword_comparison_data.append({
+                                                    'keyword': str(keyword),  # Convert to string for safety
+                                                    'url': str(url),  # Convert to string for safety
+                                                    'position': url_keyword_data['Position'].mean()
+                                                })
+                            
+                            if keyword_comparison_data:
+                                keyword_comparison_df = pd.DataFrame(keyword_comparison_data)
                                 
-                                if not url_keyword_data.empty:
-                                    keyword_comparison_data.append({
-                                        'keyword': keyword,
-                                        'url': url,
-                                        'position': url_keyword_data['Position'].mean()
-                                    })
-                        
-                        if keyword_comparison_data:
-                            keyword_comparison_df = pd.DataFrame(keyword_comparison_data)
-                            
-                            keyword_comparison_chart = px.bar(
-                                keyword_comparison_df,
-                                x='keyword',
-                                y='position',
-                                color='url',
-                                barmode='group',
-                                title='URL Performance by Keyword',
-                                labels={'keyword': 'Keyword', 'position': 'Average Position', 'url': 'URL'}
-                            )
-                            
-                            keyword_comparison_chart.update_layout(
-                                xaxis_title="Keyword",
-                                yaxis_title="Average Position",
-                                yaxis_autorange='reversed',  # Lower positions (better rankings) at the top
-                                legend_title="URL"
-                            )
-                            
-                            st.plotly_chart(keyword_comparison_chart, use_container_width=True)
-                        else:
-                            st.info("Not enough keyword data for the selected URLs.")
+                                keyword_comparison_chart = px.bar(
+                                    keyword_comparison_df,
+                                    x='keyword',
+                                    y='position',
+                                    color='url',
+                                    barmode='group',
+                                    title='URL Performance by Keyword',
+                                    labels={'keyword': 'Keyword', 'position': 'Average Position', 'url': 'URL'}
+                                )
+                                
+                                keyword_comparison_chart.update_layout(
+                                    xaxis_title="Keyword",
+                                    yaxis_title="Average Position",
+                                    yaxis_autorange='reversed',  # Lower positions (better rankings) at the top
+                                    legend_title="URL"
+                                )
+                                
+                                st.plotly_chart(keyword_comparison_chart, use_container_width=True)
+                            else:
+                                st.info("Not enough keyword data for the selected URLs.")
+                        except Exception as e:
+                            st.error(f"Error creating keyword comparison chart: {e}")
+                            st.info("Not enough valid keyword data for the selected URLs.")
                     else:
                         st.error("Keyword and Position data not available")
                 
