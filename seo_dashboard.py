@@ -442,20 +442,101 @@ INDEX_HTML = """
                     </div>
                 </div>
                 
+                <!-- Updated Time Comparison Content section in HTML -->
                 <div id="time-comparison-content" class="d-none">
-                    <div class="card">
-                        <div class="card-header"><h5>Comparison Table</h5></div>
+                    <div class="card mb-4">
+                        <div class="card-header">
+                            <h5>Comparison Summary</h5>
+                        </div>
+                        <div class="card-body">
+                            <div class="row">
+                                <div class="col-md-4">
+                                    <div class="alert alert-info">
+                                        <strong>Keyword:</strong> <span id="time-compare-selected-keyword"></span>
+                                    </div>
+                                </div>
+                                <div class="col-md-4">
+                                    <div class="alert alert-primary">
+                                        <strong>Start Date:</strong> <span id="time-compare-selected-start-date"></span>
+                                        <small class="d-block">(<span id="start-url-count">0</span> URLs found)</small>
+                                    </div>
+                                </div>
+                                <div class="col-md-4">
+                                    <div class="alert alert-primary">
+                                        <strong>End Date:</strong> <span id="time-compare-selected-end-date"></span>
+                                        <small class="d-block">(<span id="end-url-count">0</span> URLs found)</small>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="row">
+                        <!-- Start Date URLs Table -->
+                        <div class="col-md-6">
+                            <div class="card">
+                                <div class="card-header">
+                                    <h5>Start Date URLs</h5>
+                                    <small class="text-muted">Sorted by position (best positions first)</small>
+                                </div>
+                                <div class="card-body data-table">
+                                    <table class="table table-striped table-hover" id="start-date-table">
+                                        <thead>
+                                            <tr>
+                                                <th>Position</th>
+                                                <th>URL</th>
+                                                <th>Domain</th>
+                                                <th>Position Change</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="start-date-urls"></tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- End Date URLs Table -->
+                        <div class="col-md-6">
+                            <div class="card">
+                                <div class="card-header">
+                                    <h5>End Date URLs</h5>
+                                    <small class="text-muted">Sorted by position (best positions first)</small>
+                                </div>
+                                <div class="card-body data-table">
+                                    <table class="table table-striped table-hover" id="end-date-table">
+                                        <thead>
+                                            <tr>
+                                                <th>Position</th>
+                                                <th>URL</th>
+                                                <th>Domain</th>
+                                                <th>Position Change</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="end-date-urls"></tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- URL Movement Analysis -->
+                    <div class="card mt-4">
+                        <div class="card-header">
+                            <h5>Position Changes Analysis</h5>
+                            <small class="text-muted">All URLs with their position changes</small>
+                        </div>
                         <div class="card-body data-table">
-                            <table class="table table-striped table-hover" id="time-compare-rank-table-container">
+                            <table class="table table-striped table-hover" id="position-changes-table">
                                 <thead>
                                     <tr>
-                                        <th>Rank</th>
-                                        <th>URL (Start Date)</th>
-                                        <th>URL (End Date)</th>
-                                        <th>Position Change</th>
+                                        <th>URL</th>
+                                        <th>Domain</th>
+                                        <th>Start Position</th>
+                                        <th>End Position</th>
+                                        <th>Change</th>
                                     </tr>
                                 </thead>
-                                <tbody id="time-compare-rank-table"></tbody>
+                                <tbody id="position-changes"></tbody>
                             </table>
                         </div>
                     </div>
@@ -572,7 +653,7 @@ INDEX_HTML = """
                 const startSelect = document.getElementById('time-compare-start-date');
                 const endSelect = document.getElementById('time-compare-end-date');
                 const compareBtn = document.getElementById('compare-time-btn');
-
+                
                 // Reset and disable if no keyword selected
                 if (!keyword) {
                     startSelect.innerHTML = '<option value="">Select a keyword first</option>';
@@ -582,7 +663,14 @@ INDEX_HTML = """
                     compareBtn.disabled = true;
                     return;
                 }
-
+                
+                // Show loading message
+                startSelect.innerHTML = '<option value="">Loading dates...</option>';
+                endSelect.innerHTML = '<option value="">Loading dates...</option>';
+                startSelect.disabled = true;
+                endSelect.disabled = true;
+                compareBtn.disabled = true;
+                
                 // Fetch available dates for the keyword
                 fetch('/get_keyword_dates', {
                     method: 'POST',
@@ -591,29 +679,56 @@ INDEX_HTML = """
                 })
                 .then(response => response.json())
                 .then(data => {
-                    if (data.success && data.dates.length > 0) {
+                    if (data.success && data.dates && data.dates.length > 0) {
+                        console.log(`Found ${data.dates.length} dates for keyword "${keyword}"`);
+                        
                         // Populate start and end date dropdowns
                         startSelect.innerHTML = '<option value="">Select start date</option>';
                         endSelect.innerHTML = '<option value="">Select end date</option>';
-
+                        
                         data.dates.forEach(date => {
+                            // Add option to start date dropdown
                             const option1 = document.createElement('option');
                             option1.value = date;
                             option1.textContent = date;
                             startSelect.appendChild(option1);
-
+                            
+                            // Add option to end date dropdown
                             const option2 = document.createElement('option');
                             option2.value = date;
                             option2.textContent = date;
                             endSelect.appendChild(option2);
                         });
-
+                        
+                        // Enable dropdowns
                         startSelect.disabled = false;
                         endSelect.disabled = false;
-                        compareBtn.disabled = false;
+                        
+                        // If we have at least 2 dates, pre-select the first and last dates
+                        if (data.dates.length >= 2) {
+                            // Sort dates chronologically
+                            data.dates.sort();
+                            
+                            // Set first date as start and last date as end
+                            startSelect.value = data.dates[0];
+                            endSelect.value = data.dates[data.dates.length - 1];
+                            
+                            // Enable the compare button
+                            compareBtn.disabled = false;
+                            
+                            // Optional: automatically run the comparison
+                            // compareOverTime(data.dates[0], data.dates[data.dates.length - 1], keyword);
+                        }
                     } else {
-                        startSelect.innerHTML = '<option value="">No dates available</option>';
-                        endSelect.innerHTML = '<option value="">No dates available</option>';
+                        if (data.error) {
+                            console.error(`Error fetching dates: ${data.error}`);
+                            startSelect.innerHTML = `<option value="">Error: ${data.error}</option>`;
+                            endSelect.innerHTML = `<option value="">Error: ${data.error}</option>`;
+                        } else {
+                            console.warn(`No dates found for keyword "${keyword}"`);
+                            startSelect.innerHTML = '<option value="">No dates available</option>';
+                            endSelect.innerHTML = '<option value="">No dates available</option>';
+                        }
                         startSelect.disabled = true;
                         endSelect.disabled = true;
                         compareBtn.disabled = true;
@@ -623,8 +738,23 @@ INDEX_HTML = """
                     console.error('Error fetching dates:', error);
                     startSelect.innerHTML = '<option value="">Error loading dates</option>';
                     endSelect.innerHTML = '<option value="">Error loading dates</option>';
+                    startSelect.disabled = true;
+                    endSelect.disabled = true;
+                    compareBtn.disabled = true;
                 });
             });
+
+            // Enable the compare button when both start and end dates are selected
+            document.getElementById('time-compare-start-date').addEventListener('change', updateCompareButtonState);
+            document.getElementById('time-compare-end-date').addEventListener('change', updateCompareButtonState);
+
+            function updateCompareButtonState() {
+                const startDate = document.getElementById('time-compare-start-date').value;
+                const endDate = document.getElementById('time-compare-end-date').value;
+                const compareBtn = document.getElementById('compare-time-btn');
+                
+                compareBtn.disabled = !(startDate && endDate);
+            }
             
             // Time Comparison Button
             document.getElementById('compare-time-btn').addEventListener('click', function() {
@@ -1510,6 +1640,8 @@ INDEX_HTML = """
             document.getElementById('time-comparison-loading').classList.remove('d-none');
             document.getElementById('time-comparison-content').classList.add('d-none');
             
+            console.log(`Comparing keyword "${keyword}" between dates: ${startDate} and ${endDate}`);
+            
             fetch('/compare_over_time', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -1522,30 +1654,131 @@ INDEX_HTML = """
                 const contentDiv = document.getElementById('time-comparison-content');
                 
                 if (data.success) {
+                    console.log(`Received data: ${data.start_count} start URLs, ${data.end_count} end URLs`);
+                    
                     // Show the content area
                     contentDiv.classList.remove('d-none');
                     
-                    // Clear any old HTML inside contentDiv if needed
-                    // contentDiv.innerHTML = ""; // optional if you're dynamically adding other stuff
+                    // Update summary information
+                    document.getElementById('time-compare-selected-keyword').textContent = data.keyword;
+                    document.getElementById('time-compare-selected-start-date').textContent = data.start_date;
+                    document.getElementById('time-compare-selected-end-date').textContent = data.end_date;
+                    document.getElementById('start-url-count').textContent = data.start_count;
+                    document.getElementById('end-url-count').textContent = data.end_count;
                     
-                    // Fill the rank table
-                    const tableBody = document.getElementById('time-compare-rank-table');
-                    tableBody.innerHTML = '';
+                    // Populate the start date table
+                    const startTableBody = document.getElementById('start-date-urls');
+                    startTableBody.innerHTML = '';
                     
-                    data.rank_table.forEach(item => {
-                        const tr = document.createElement('tr');
-                        tr.innerHTML = `
-                            <td>${item.rank}</td>
-                            <td>${item.url_start}</td>
-                            <td>${item.url_end}</td>
-                            <td>${item.change}</td>
-                        `;
-                        tableBody.appendChild(tr);
-                    });
+                    if (data.start_urls && data.start_urls.length > 0) {
+                        console.log(`Displaying ${data.start_urls.length} URLs for start date`);
+                        
+                        // Display ALL URLs for the start date
+                        data.start_urls.forEach(item => {
+                            const tr = document.createElement('tr');
+                            
+                            // Add row class based on position change
+                            if (item.position_change) {
+                                if (item.position_change < 0) {
+                                    tr.className = 'table-success'; // improved
+                                } else if (item.position_change > 0) {
+                                    tr.className = 'table-warning'; // declined
+                                }
+                            }
+                            
+                            tr.innerHTML = `
+                                <td>${item.position}</td>
+                                <td>${item.url}</td>
+                                <td>${item.domain || ''}</td>
+                                <td>${item.position_change_text}</td>
+                            `;
+                            startTableBody.appendChild(tr);
+                        });
+                    } else {
+                        // No start date data
+                        startTableBody.innerHTML = '<tr><td colspan="4" class="text-center">No data available for start date</td></tr>';
+                    }
+                    
+                    // Populate the end date table
+                    const endTableBody = document.getElementById('end-date-urls');
+                    endTableBody.innerHTML = '';
+                    
+                    if (data.end_urls && data.end_urls.length > 0) {
+                        console.log(`Displaying ${data.end_urls.length} URLs for end date`);
+                        
+                        // Display ALL URLs for the end date
+                        data.end_urls.forEach(item => {
+                            const tr = document.createElement('tr');
+                            
+                            // Add row class based on position change
+                            if (item.position_change) {
+                                if (item.position_change < 0) {
+                                    tr.className = 'table-success'; // improved
+                                } else if (item.position_change > 0) {
+                                    tr.className = 'table-warning'; // declined
+                                }
+                            } else if (item.position_change_text === "New") {
+                                tr.className = 'table-info'; // new URL
+                            }
+                            
+                            tr.innerHTML = `
+                                <td>${item.position}</td>
+                                <td>${item.url}</td>
+                                <td>${item.domain || ''}</td>
+                                <td>${item.position_change_text}</td>
+                            `;
+                            endTableBody.appendChild(tr);
+                        });
+                    } else {
+                        // No end date data
+                        endTableBody.innerHTML = '<tr><td colspan="4" class="text-center">No data available for end date</td></tr>';
+                    }
+                    
+                    // Create the position changes analysis table
+                    const changesTableBody = document.getElementById('position-changes');
+                    changesTableBody.innerHTML = '';
+                    
+                    if (data.position_changes && data.position_changes.length > 0) {
+                        console.log(`Displaying ${data.position_changes.length} position changes`);
+                        
+                        data.position_changes.forEach(item => {
+                            const tr = document.createElement('tr');
+                            
+                            // Add row class based on change status
+                            if (item.status === 'improved') {
+                                tr.className = 'table-success';
+                            } else if (item.status === 'declined') {
+                                tr.className = 'table-warning';
+                            } else if (item.status === 'new') {
+                                tr.className = 'table-info';
+                            } else if (item.status === 'dropped') {
+                                tr.className = 'table-danger';
+                            }
+                            
+                            // Format values
+                            const startPos = item.start_position !== null ? item.start_position : '-';
+                            const endPos = item.end_position !== null ? item.end_position : '-';
+                            
+                            tr.innerHTML = `
+                                <td>${item.url}</td>
+                                <td>${item.domain || ''}</td>
+                                <td>${startPos}</td>
+                                <td>${endPos}</td>
+                                <td>${item.change_text}</td>
+                            `;
+                            changesTableBody.appendChild(tr);
+                        });
+                    } else {
+                        changesTableBody.innerHTML = '<tr><td colspan="5" class="text-center">No position changes to display</td></tr>';
+                    }
                 } 
                 else if (data.error) {
                     contentDiv.classList.remove('d-none');
                     contentDiv.innerHTML = `<div class="alert alert-danger">${data.error}</div>`;
+                    console.error(`Error: ${data.error}`);
+                    if (data.traceback) {
+                        console.error(`Traceback: ${data.traceback}`);
+                    }
                 }
             })
             .catch(error => {
@@ -1553,9 +1786,9 @@ INDEX_HTML = """
                 const contentDiv = document.getElementById('time-comparison-content');
                 contentDiv.classList.remove('d-none');
                 contentDiv.innerHTML = `<div class="alert alert-danger">Error comparing time periods: ${error}</div>`;
+                console.error(`Fetch error: ${error}`);
             });
         }
-
 
 
 
@@ -1935,6 +2168,166 @@ def upload_file():
 
 @app.route('/get_keyword_dates', methods=['POST'])
 def get_keyword_dates():
+    try:
+        data = request.json
+        keyword = data.get('keyword')
+        
+        if not keyword:
+            return jsonify({'error': 'Keyword is required'})
+        
+        # Load data
+        df = pd.read_excel('temp_upload.xlsx')
+        print(f"Original columns: {df.columns.tolist()}")
+        
+        # Check if we have the needed columns
+        required_cols = ['Results', 'Position', 'Filled keyword', 'date/time']
+        missing_cols = [col for col in required_cols if col not in df.columns]
+        
+        if missing_cols:
+            print(f"Missing columns: {missing_cols}")
+            print(f"Available columns: {df.columns.tolist()}")
+            
+            # Try alternative column names
+            if 'C' in df.columns and 'D' in df.columns and 'E' in df.columns and 'F' in df.columns:
+                print("Using letter columns instead")
+                df = df.rename(columns={
+                    'C': 'Results',
+                    'D': 'Position',
+                    'E': 'Filled keyword',
+                    'F': 'date/time'
+                })
+            else:
+                return jsonify({'error': f'Required columns {missing_cols} not found in data'})
+        
+        # Filter by keyword (Filled keyword column)
+        print(f"Filtering by Filled keyword = '{keyword}'")
+        df_keyword = df[df['Filled keyword'] == keyword]
+        
+        if df_keyword.empty:
+            return jsonify({'success': True, 'dates': []})
+        
+        # For date matching, use the 'date/time' column
+        date_col = 'date/time'
+        
+        if date_col not in df_keyword.columns:
+            return jsonify({'error': f'Date column "{date_col}" not found. Available columns: {df_keyword.columns.tolist()}'})
+        
+        # Show some sample date values for debugging
+        sample_dates = df_keyword[date_col].head(5).tolist()
+        print(f"Sample date values: {sample_dates}")
+        
+        # Extract the date part from the "Mon YYYY-MM-DD H:MM:SS" format
+        # First convert to string to ensure we can do string operations
+        df_keyword['date_str_full'] = df_keyword[date_col].astype(str)
+        
+        # Extract just the date part using regex or string splitting
+        df_keyword['date_part'] = df_keyword['date_str_full'].str.extract(r'(\d{4}-\d{2}-\d{2})')
+        
+        # Show the extracted date parts
+        print("Extracted date parts:", df_keyword['date_part'].head(5).tolist())
+        
+        # Get unique dates for this keyword
+        unique_dates = df_keyword['date_part'].dropna().unique().tolist()
+        unique_dates.sort()  # Sort chronologically
+        
+        print(f"Found {len(unique_dates)} unique dates for keyword '{keyword}': {unique_dates}")
+        
+        return jsonify({
+            'success': True,
+            'dates': unique_dates
+        })
+    except Exception as e:
+        import traceback
+        traceback_str = traceback.format_exc()
+        print(traceback_str)
+        return jsonify({'error': str(e), 'traceback': traceback_str})
+    try:
+        data = request.json
+        keyword = data.get('keyword')
+        
+        if not keyword:
+            return jsonify({'error': 'Keyword is required'})
+        
+        # Load data
+        original_df = pd.read_excel('temp_upload.xlsx')
+        print(f"Original columns: {original_df.columns.tolist()}")
+        
+        # Detect data structure based on column names
+        df = original_df.copy()
+        
+        # If we have standard column names, rename them to our expected format
+        if 'Keyword' in df.columns and 'Time' in df.columns and 'Results' in df.columns and 'Position' in df.columns:
+            # Standard format
+            pass
+        elif 'A' in df.columns and 'B' in df.columns and 'C' in df.columns and 'D' in df.columns and 'E' in df.columns:
+            # Excel-style column names (A, B, C, D, E, etc.)
+            col_map = {
+                'A': 'Keyword',
+                'B': 'Time',
+                'C': 'Results',
+                'D': 'Position',
+                'E': 'Filled keyword',
+                'F': 'date/time'
+            }
+            df = df.rename(columns=col_map)
+        
+        # Determine which column to use for keyword filtering
+        # First try 'Filled keyword', then 'Keyword'
+        keyword_column = 'Filled keyword' if 'Filled keyword' in df.columns else 'Keyword'
+        
+        if keyword_column not in df.columns:
+            return jsonify({'error': f'Keyword column not found in data. Available columns: {df.columns.tolist()}'})
+        
+        # Filter by keyword
+        print(f"Filtering by {keyword_column} = '{keyword}'")
+        keyword_df = df[df[keyword_column] == keyword]
+        
+        print(f"Found {len(keyword_df)} rows for keyword '{keyword}'")
+        if keyword_df.empty:
+            return jsonify({'success': True, 'dates': []})
+        
+        # Identify all possible date columns
+        date_columns = []
+        for col in ['Time', 'date/time', 'B', 'F']:
+            if col in keyword_df.columns:
+                date_columns.append(col)
+        
+        if not date_columns:
+            return jsonify({'error': 'No date columns found in data'})
+        
+        print(f"Date columns to check: {date_columns}")
+        
+        # Extract unique dates from all date columns
+        all_dates = set()
+        
+        for date_col in date_columns:
+            try:
+                # Try to convert to datetime
+                keyword_df['date_dt'] = pd.to_datetime(keyword_df[date_col], errors='coerce')
+                keyword_df['date_str'] = keyword_df['date_dt'].dt.strftime('%Y-%m-%d')
+                
+                # Add all valid date strings to our set
+                valid_dates = keyword_df['date_str'].dropna().unique().tolist()
+                all_dates.update(valid_dates)
+                
+                print(f"Found {len(valid_dates)} unique dates in column '{date_col}'")
+            except Exception as e:
+                print(f"Error processing date column '{date_col}': {e}")
+        
+        # Convert to sorted list
+        dates = sorted(list(all_dates))
+        print(f"Total unique dates found: {len(dates)}")
+        print(f"Sample dates: {dates[:5]}")
+        
+        return jsonify({
+            'success': True,
+            'dates': dates
+        })
+    except Exception as e:
+        import traceback
+        traceback_str = traceback.format_exc()
+        print(traceback_str)
+        return jsonify({'error': str(e), 'traceback': traceback_str})
     try:
         data = request.json
         keyword = data.get('keyword')
@@ -2611,7 +3004,1188 @@ def compare_over_time():
         end_date_str = data.get('end_date')
         keyword = data.get('keyword')
         
-        # Validation...
+        # Validation
+        if not all([start_date_str, end_date_str, keyword]):
+            return jsonify({'error': 'Start date, end date, and keyword are required'})
+        
+        # Load the Excel file
+        df = pd.read_excel('temp_upload.xlsx')
+        
+        # Print columns for debugging
+        print("Original columns:", df.columns.tolist())
+        
+        # Check if we have the needed columns
+        required_cols = ['Results', 'Position', 'Filled keyword', 'date/time']
+        missing_cols = [col for col in required_cols if col not in df.columns]
+        
+        if missing_cols:
+            print(f"Missing columns: {missing_cols}")
+            print(f"Available columns: {df.columns.tolist()}")
+            
+            # Try alternative column names
+            if 'C' in df.columns and 'D' in df.columns and 'E' in df.columns and 'F' in df.columns:
+                print("Using letter columns instead")
+                df = df.rename(columns={
+                    'C': 'Results',
+                    'D': 'Position',
+                    'E': 'Filled keyword',
+                    'F': 'date/time'
+                })
+            else:
+                return jsonify({'error': f'Required columns {missing_cols} not found in data'})
+        
+        # Filter by keyword (Filled keyword column)
+        print(f"Filtering by Filled keyword = '{keyword}'")
+        df_keyword = df[df['Filled keyword'] == keyword]
+        
+        if df_keyword.empty:
+            return jsonify({'error': f'No data found for keyword "{keyword}"'})
+        
+        # For date matching, use the 'date/time' column
+        date_col = 'date/time'
+        
+        if date_col not in df_keyword.columns:
+            return jsonify({'error': f'Date column "{date_col}" not found. Available columns: {df_keyword.columns.tolist()}'})
+        
+        # Extract the date part from the "Mon YYYY-MM-DD H:MM:SS" format
+        df_keyword['date_str_full'] = df_keyword[date_col].astype(str)
+        df_keyword['date_part'] = df_keyword['date_str_full'].str.extract(r'(\d{4}-\d{2}-\d{2})')
+        
+        # Get unique dates for this keyword
+        unique_dates = df_keyword['date_part'].dropna().unique().tolist()
+        unique_dates.sort()
+        print(f"Unique dates for keyword '{keyword}': {unique_dates}")
+        
+        # Format input dates to match the format in our data
+        try:
+            start_dt = pd.to_datetime(start_date_str)
+            end_dt = pd.to_datetime(end_date_str)
+            start_date_formatted = start_dt.strftime('%Y-%m-%d')
+            end_date_formatted = end_dt.strftime('%Y-%m-%d')
+        except Exception as e:
+            print(f"Error parsing input dates: {e}")
+            start_date_formatted = start_date_str
+            end_date_formatted = end_date_str
+        
+        # Filter by the date part to match our input dates
+        start_data = df_keyword[df_keyword['date_part'] == start_date_formatted]
+        end_data = df_keyword[df_keyword['date_part'] == end_date_formatted]
+        
+        print(f"Found {len(start_data)} rows for start date and {len(end_data)} rows for end date")
+        
+        # If no data found, try alternative methods (contains match or fallback to available dates)
+        if start_data.empty:
+            print(f"No matches for start date '{start_date_formatted}', trying contains match")
+            start_data = df_keyword[df_keyword[date_col].astype(str).str.contains(start_date_formatted)]
+            print(f"Found {len(start_data)} rows after contains match")
+            
+            if start_data.empty and unique_dates:
+                earliest_date = unique_dates[0]
+                start_data = df_keyword[df_keyword['date_part'] == earliest_date]
+                print(f"Using earliest date {earliest_date} with {len(start_data)} rows")
+        
+        if end_data.empty:
+            print(f"No matches for end date '{end_date_formatted}', trying contains match")
+            end_data = df_keyword[df_keyword[date_col].astype(str).str.contains(end_date_formatted)]
+            print(f"Found {len(end_data)} rows after contains match")
+            
+            if end_data.empty and len(unique_dates) > 1:
+                latest_date = unique_dates[-1]
+                end_data = df_keyword[df_keyword['date_part'] == latest_date]
+                print(f"Using latest date {latest_date} with {len(end_data)} rows")
+        
+        # ======== FIX DUPLICATES ========
+        # Remove duplicates by URL to fix the double position issue
+        if not start_data.empty:
+            # Drop duplicates, keeping only the first occurrence for each URL
+            start_data = start_data.drop_duplicates(subset=['Results'])
+            print(f"After removing duplicates, start data has {len(start_data)} rows")
+        
+        if not end_data.empty:
+            # Drop duplicates, keeping only the first occurrence for each URL
+            end_data = end_data.drop_duplicates(subset=['Results'])
+            print(f"After removing duplicates, end data has {len(end_data)} rows")
+        
+        # ======== PREPARE START DATE DATA ========
+        start_urls = []
+        if not start_data.empty:
+            # Sort by Position (ascending - lower numbers = better ranking)
+            start_data_sorted = start_data.sort_values(by='Position', ascending=True)
+            
+            # Create URL to position mapping for end data to calculate changes
+            end_positions = {}
+            if not end_data.empty:
+                for idx, row in end_data.iterrows():
+                    if pd.notna(row['Results']) and pd.notna(row['Position']):
+                        end_positions[row['Results']] = int(row['Position']) if isinstance(row['Position'], (int, float)) else row['Position']
+            
+            # Collect ALL URLs and positions
+            for idx, row in start_data_sorted.iterrows():
+                url = row['Results']
+                position = row['Position']
+                
+                if pd.notna(url) and pd.notna(position):
+                    try:
+                        # Try to convert position to integer if possible
+                        pos_value = int(position) if isinstance(position, (int, float)) else position
+                        
+                        # Get the domain
+                        domain = urlparse(url).netloc if pd.notna(url) else ''
+                        
+                        # Calculate position change if URL exists in end data
+                        position_change = None
+                        position_change_text = "N/A"
+                        if url in end_positions:
+                            end_pos = end_positions[url]
+                            position_change = end_pos - pos_value
+                            if position_change < 0:
+                                position_change_text = f"↑ {abs(position_change)} (improved)"
+                            elif position_change > 0:
+                                position_change_text = f"↓ {position_change} (declined)"
+                            else:
+                                position_change_text = "No change"
+                        else:
+                            position_change_text = "Not in end data"
+                        
+                        start_urls.append({
+                            'url': url,
+                            'position': pos_value,
+                            'domain': domain,
+                            'position_change': position_change,
+                            'position_change_text': position_change_text
+                        })
+                    except Exception as e:
+                        print(f"Error processing start URL {url}: {e}")
+                        continue
+        
+        # ======== PREPARE END DATE DATA ========
+        end_urls = []
+        if not end_data.empty:
+            # Sort by Position (ascending - lower numbers = better ranking)
+            end_data_sorted = end_data.sort_values(by='Position', ascending=True)
+            
+            # Create URL to position mapping for start data to calculate changes
+            start_positions = {}
+            if not start_data.empty:
+                for idx, row in start_data.iterrows():
+                    if pd.notna(row['Results']) and pd.notna(row['Position']):
+                        start_positions[row['Results']] = int(row['Position']) if isinstance(row['Position'], (int, float)) else row['Position']
+            
+            # Collect ALL URLs and positions
+            for idx, row in end_data_sorted.iterrows():
+                url = row['Results']
+                position = row['Position']
+                
+                if pd.notna(url) and pd.notna(position):
+                    try:
+                        # Try to convert position to integer if possible
+                        pos_value = int(position) if isinstance(position, (int, float)) else position
+                        
+                        # Get the domain
+                        domain = urlparse(url).netloc if pd.notna(url) else ''
+                        
+                        # Calculate position change if URL exists in start data
+                        position_change = None
+                        position_change_text = "N/A"
+                        if url in start_positions:
+                            start_pos = start_positions[url]
+                            position_change = pos_value - start_pos
+                            if position_change < 0:
+                                position_change_text = f"↑ {abs(position_change)} (improved)"
+                            elif position_change > 0:
+                                position_change_text = f"↓ {position_change} (declined)"
+                            else:
+                                position_change_text = "No change"
+                        else:
+                            position_change_text = "New"
+                        
+                        end_urls.append({
+                            'url': url,
+                            'position': pos_value,
+                            'domain': domain,
+                            'position_change': position_change,
+                            'position_change_text': position_change_text
+                        })
+                    except Exception as e:
+                        print(f"Error processing end URL {url}: {e}")
+                        continue
+        
+        # ======== PREPARE POSITION CHANGES ANALYSIS ========
+        # Identify all URLs that exist in either start or end data
+        all_urls = set()
+        if start_data.empty and end_data.empty:
+            position_changes = []
+        else:
+            for url_data in start_urls:
+                all_urls.add(url_data['url'])
+            
+            for url_data in end_urls:
+                all_urls.add(url_data['url'])
+            
+            # Create combined start and end mappings
+            start_pos_map = {item['url']: item['position'] for item in start_urls}
+            end_pos_map = {item['url']: item['position'] for item in end_urls}
+            
+            # Build the position changes data for ALL URLs
+            position_changes = []
+            for url in all_urls:
+                start_pos = start_pos_map.get(url, None)
+                end_pos = end_pos_map.get(url, None)
+                
+                # Only include if at least one position exists
+                if start_pos is not None or end_pos is not None:
+                    change_data = {
+                        'url': url,
+                        'start_position': start_pos,
+                        'end_position': end_pos,
+                        'domain': urlparse(url).netloc
+                    }
+                    
+                    # Calculate position change
+                    if start_pos is not None and end_pos is not None:
+                        change = end_pos - start_pos
+                        if change < 0:
+                            change_data['change_text'] = f"↑ {abs(change)} (improved)"
+                            change_data['status'] = 'improved'
+                        elif change > 0:
+                            change_data['change_text'] = f"↓ {change} (declined)"
+                            change_data['status'] = 'declined'
+                        else:
+                            change_data['change_text'] = "No change"
+                            change_data['status'] = 'unchanged'
+                        change_data['change'] = change
+                    else:
+                        change_data['change'] = None
+                        if start_pos is None:
+                            change_data['change_text'] = "New"
+                            change_data['status'] = 'new'
+                        else:
+                            change_data['change_text'] = "Dropped"
+                            change_data['status'] = 'dropped'
+                    
+                    position_changes.append(change_data)
+            
+            # Sort by absolute change (biggest changes first)
+            position_changes = sorted(position_changes, 
+                key=lambda x: (
+                    # Sort order: first by status (changed, then new/dropped, then unchanged)
+                    0 if x['status'] in ('improved', 'declined') else (1 if x['status'] in ('new', 'dropped') else 2),
+                    # Then by absolute change value (descending)
+                    abs(x['change']) if x['change'] is not None else 0
+                ), 
+                reverse=True
+            )
+        
+        # Return all the prepared data
+        return jsonify({
+            'success': True,
+            'keyword': keyword,
+            'start_date': start_date_str,
+            'end_date': end_date_str,
+            'start_urls': start_urls,
+            'end_urls': end_urls,
+            'position_changes': position_changes,
+            'start_count': len(start_urls),
+            'end_count': len(end_urls),
+            'available_dates': unique_dates
+        })
+        
+    except Exception as e:
+        import traceback
+        traceback_str = traceback.format_exc()
+        print(traceback_str)
+        return jsonify({'error': str(e), 'traceback': traceback_str})
+    try:
+        data = request.json
+        start_date_str = data.get('start_date')
+        end_date_str = data.get('end_date')
+        keyword = data.get('keyword')
+        
+        # Validation
+        if not all([start_date_str, end_date_str, keyword]):
+            return jsonify({'error': 'Start date, end date, and keyword are required'})
+        
+        # Load the Excel file
+        df = pd.read_excel('temp_upload.xlsx')
+        
+        # Print columns for debugging
+        print("Original columns:", df.columns.tolist())
+        
+        # Check if we have the needed columns
+        required_cols = ['Results', 'Position', 'Filled keyword', 'date/time']
+        missing_cols = [col for col in required_cols if col not in df.columns]
+        
+        if missing_cols:
+            print(f"Missing columns: {missing_cols}")
+            print(f"Available columns: {df.columns.tolist()}")
+            
+            # Try alternative column names
+            if 'C' in df.columns and 'D' in df.columns and 'E' in df.columns and 'F' in df.columns:
+                print("Using letter columns instead")
+                df = df.rename(columns={
+                    'C': 'Results',
+                    'D': 'Position',
+                    'E': 'Filled keyword',
+                    'F': 'date/time'
+                })
+            else:
+                return jsonify({'error': f'Required columns {missing_cols} not found in data'})
+        
+        # Filter by keyword (Filled keyword column)
+        print(f"Filtering by Filled keyword = '{keyword}'")
+        df_keyword = df[df['Filled keyword'] == keyword]
+        
+        if df_keyword.empty:
+            return jsonify({'error': f'No data found for keyword "{keyword}"'})
+        
+        # For date matching, use the 'date/time' column
+        date_col = 'date/time'
+        
+        if date_col not in df_keyword.columns:
+            return jsonify({'error': f'Date column "{date_col}" not found. Available columns: {df_keyword.columns.tolist()}'})
+        
+        # Show some sample date values for debugging
+        sample_dates = df_keyword[date_col].head(5).tolist()
+        print(f"Sample date values: {sample_dates}")
+        
+        # Extract the date part from the "Mon YYYY-MM-DD H:MM:SS" format
+        # First convert to string to ensure we can do string operations
+        df_keyword['date_str_full'] = df_keyword[date_col].astype(str)
+        
+        # Extract just the date part using regex or string splitting
+        df_keyword['date_part'] = df_keyword['date_str_full'].str.extract(r'(\d{4}-\d{2}-\d{2})')
+        
+        # Show the extracted date parts
+        print("Extracted date parts:", df_keyword['date_part'].head(5).tolist())
+        
+        # Get unique dates for this keyword
+        unique_dates = df_keyword['date_part'].dropna().unique().tolist()
+        print(f"Unique dates for keyword '{keyword}': {unique_dates}")
+        
+        # Format input dates to match the format in our data
+        # First parse the input dates
+        try:
+            start_dt = pd.to_datetime(start_date_str)
+            end_dt = pd.to_datetime(end_date_str)
+            
+            # Format to match YYYY-MM-DD format in our data
+            start_date_formatted = start_dt.strftime('%Y-%m-%d')
+            end_date_formatted = end_dt.strftime('%Y-%m-%d')
+            
+            print(f"Formatted input dates: {start_date_formatted} and {end_date_formatted}")
+        except Exception as e:
+            print(f"Error parsing input dates: {e}")
+            # Use as-is if parsing fails
+            start_date_formatted = start_date_str
+            end_date_formatted = end_date_str
+        
+        # Filter by the date part to match our input dates
+        start_data = df_keyword[df_keyword['date_part'] == start_date_formatted]
+        end_data = df_keyword[df_keyword['date_part'] == end_date_formatted]
+        
+        print(f"Found {len(start_data)} rows for start date and {len(end_data)} rows for end date")
+        
+        # If no data found, try alternative methods
+        if start_data.empty:
+            print(f"No matches for start date '{start_date_formatted}', trying contains match")
+            start_data = df_keyword[df_keyword[date_col].astype(str).str.contains(start_date_formatted)]
+            print(f"Found {len(start_data)} rows after contains match")
+        
+        if end_data.empty:
+            print(f"No matches for end date '{end_date_formatted}', trying contains match")
+            end_data = df_keyword[df_keyword[date_col].astype(str).str.contains(end_date_formatted)]
+            print(f"Found {len(end_data)} rows after contains match")
+        
+        # If still empty and we have data overall, just use some of the data
+        if (start_data.empty or end_data.empty) and not df_keyword.empty:
+            print("Not enough date matches, using available data as fallback")
+            
+            # Get unique dates and use the earliest and latest
+            if len(unique_dates) >= 2:
+                unique_dates.sort()
+                
+                if start_data.empty:
+                    earliest_date = unique_dates[0]
+                    start_data = df_keyword[df_keyword['date_part'] == earliest_date]
+                    print(f"Using earliest date {earliest_date} with {len(start_data)} rows")
+                
+                if end_data.empty:
+                    latest_date = unique_dates[-1]
+                    end_data = df_keyword[df_keyword['date_part'] == latest_date]
+                    print(f"Using latest date {latest_date} with {len(end_data)} rows")
+            else:
+                # If only one date, split the data in half
+                print("Only one date available, splitting the data")
+                all_data = df_keyword.copy()
+                half_idx = len(all_data) // 2
+                
+                if start_data.empty:
+                    start_data = all_data.iloc[:half_idx]
+                
+                if end_data.empty:
+                    end_data = all_data.iloc[half_idx:]
+        
+        # ======== PREPARE START DATE DATA ========
+        start_urls = []
+        if not start_data.empty:
+            # Sort by Position (ascending - lower numbers = better ranking)
+            start_data_sorted = start_data.sort_values(by='Position', ascending=True)
+            
+            # Collect ALL URLs and positions
+            for idx, row in start_data_sorted.iterrows():
+                url = row['Results']
+                position = row['Position']
+                
+                if pd.notna(url) and pd.notna(position):
+                    try:
+                        # Try to convert position to integer if possible
+                        pos_value = int(position) if isinstance(position, (int, float)) else position
+                        
+                        # Get the domain
+                        domain = urlparse(url).netloc if pd.notna(url) else ''
+                        
+                        start_urls.append({
+                            'url': url,
+                            'position': pos_value,
+                            'domain': domain
+                        })
+                    except:
+                        # Skip entries that can't be processed
+                        continue
+        
+        # ======== PREPARE END DATE DATA ========
+        end_urls = []
+        if not end_data.empty:
+            # Sort by Position (ascending - lower numbers = better ranking)
+            end_data_sorted = end_data.sort_values(by='Position', ascending=True)
+            
+            # Collect ALL URLs and positions
+            for idx, row in end_data_sorted.iterrows():
+                url = row['Results']
+                position = row['Position']
+                
+                if pd.notna(url) and pd.notna(position):
+                    try:
+                        # Try to convert position to integer if possible
+                        pos_value = int(position) if isinstance(position, (int, float)) else position
+                        
+                        # Get the domain
+                        domain = urlparse(url).netloc if pd.notna(url) else ''
+                        
+                        end_urls.append({
+                            'url': url,
+                            'position': pos_value,
+                            'domain': domain
+                        })
+                    except:
+                        # Skip entries that can't be processed
+                        continue
+        
+        # Return separate lists for both dates
+        return jsonify({
+            'success': True,
+            'keyword': keyword,
+            'start_date': start_date_str,
+            'end_date': end_date_str,
+            'start_urls': start_urls,
+            'end_urls': end_urls,
+            'start_count': len(start_urls),
+            'end_count': len(end_urls),
+            'available_dates': unique_dates
+        })
+        
+    except Exception as e:
+        import traceback
+        traceback_str = traceback.format_exc()
+        print(traceback_str)
+        return jsonify({'error': str(e), 'traceback': traceback_str})
+    try:
+        data = request.json
+        start_date_str = data.get('start_date')
+        end_date_str = data.get('end_date')
+        keyword = data.get('keyword')
+        
+        # Validation
+        if not all([start_date_str, end_date_str, keyword]):
+            return jsonify({'error': 'Start date, end date, and keyword are required'})
+        
+        # Load the Excel file
+        df = pd.read_excel('temp_upload.xlsx')
+        
+        # Print columns for debugging
+        print("Original columns:", df.columns.tolist())
+        
+        # Check if we have the needed columns
+        required_cols = ['Results', 'Position', 'Filled keyword']
+        missing_cols = [col for col in required_cols if col not in df.columns]
+        
+        if missing_cols:
+            print(f"Missing columns: {missing_cols}")
+            print(f"Available columns: {df.columns.tolist()}")
+            
+            # Check if we have alternative columns 
+            if 'C' in df.columns and 'D' in df.columns and 'E' in df.columns:
+                print("Found letter columns instead, using those")
+                df = df.rename(columns={
+                    'C': 'Results',
+                    'D': 'Position',
+                    'E': 'Filled keyword'
+                })
+            else:
+                return jsonify({'error': f'Required columns {missing_cols} not found in data. Available columns: {df.columns.tolist()}'})
+        
+        # Filter by keyword (Filled keyword column)
+        print(f"Filtering by Filled keyword = '{keyword}'")
+        df_keyword = df[df['Filled keyword'] == keyword]
+        
+        if df_keyword.empty:
+            return jsonify({'error': f'No data found for keyword "{keyword}"'})
+        
+        # For date matching, we'll use the 'Time' column or 'B' if available
+        date_col = 'Time' if 'Time' in df.columns else ('B' if 'B' in df.columns else None)
+        
+        if not date_col:
+            print(f"No date column found. Available columns: {df.columns.tolist()}")
+            return jsonify({'error': 'No date column found'})
+        
+        print(f"Using {date_col} as date column")
+        
+        # Convert to datetime for matching
+        df_keyword['datetime'] = pd.to_datetime(df_keyword[date_col], errors='coerce')
+        df_keyword['date_str'] = df_keyword['datetime'].dt.strftime('%Y-%m-%d')
+        
+        # Print unique dates for debugging
+        unique_dates = df_keyword['date_str'].dropna().unique().tolist()
+        print(f"Available dates ({len(unique_dates)}): {unique_dates}")
+        
+        # Filter by dates
+        start_data = df_keyword[df_keyword['date_str'] == start_date_str]
+        end_data = df_keyword[df_keyword['date_str'] == end_date_str]
+        
+        print(f"Found {len(start_data)} rows for start date and {len(end_data)} rows for end date")
+        
+        # If we didn't find exact matches, try to find dates containing the string
+        if start_data.empty:
+            print(f"No exact matches for start date, trying contains match for {start_date_str}")
+            start_data = df_keyword[df_keyword[date_col].astype(str).str.contains(start_date_str)]
+            print(f"Found {len(start_data)} rows after contains match")
+        
+        if end_data.empty:
+            print(f"No exact matches for end date, trying contains match for {end_date_str}")
+            end_data = df_keyword[df_keyword[date_col].astype(str).str.contains(end_date_str)]
+            print(f"Found {len(end_data)} rows after contains match")
+        
+        # If still empty, try a more lenient date matching approach
+        if start_data.empty or end_data.empty:
+            # Try matching just the day value
+            try:
+                start_day = pd.to_datetime(start_date_str).day
+                end_day = pd.to_datetime(end_date_str).day
+                
+                print(f"Trying day matching: start_day={start_day}, end_day={end_day}")
+                
+                if start_data.empty:
+                    start_data = df_keyword[df_keyword['datetime'].dt.day == start_day]
+                    print(f"Found {len(start_data)} rows after day matching for start date")
+                
+                if end_data.empty:
+                    end_data = df_keyword[df_keyword['datetime'].dt.day == end_day]
+                    print(f"Found {len(end_data)} rows after day matching for end date")
+            except Exception as e:
+                print(f"Error in day matching: {e}")
+        
+        # Last resort: just split the data if still empty
+        if start_data.empty and end_data.empty and not df_keyword.empty:
+            print("Using all data and splitting it as last resort")
+            df_keyword_sorted = df_keyword.sort_values(by='datetime')
+            
+            # Split into first half and second half
+            half_index = len(df_keyword_sorted) // 2
+            start_data = df_keyword_sorted.iloc[:half_index]
+            end_data = df_keyword_sorted.iloc[half_index:]
+            
+            print(f"Split data into {len(start_data)} start rows and {len(end_data)} end rows")
+        
+        # ======== PREPARE START DATE DATA ========
+        start_urls = []
+        if not start_data.empty:
+            # Sort by Position (ascending - lower numbers = better ranking)
+            start_data_sorted = start_data.sort_values(by='Position', ascending=True)
+            
+            # Collect ALL URLs and positions
+            for idx, row in start_data_sorted.iterrows():
+                url = row['Results']
+                position = row['Position']
+                
+                if pd.notna(url) and pd.notna(position):
+                    domain = get_domain(url) if callable(get_domain) else urlparse(url).netloc
+                    
+                    start_urls.append({
+                        'url': url,
+                        'position': int(position) if isinstance(position, (int, float)) else position,
+                        'domain': domain or ''
+                    })
+        
+        # ======== PREPARE END DATE DATA ========
+        end_urls = []
+        if not end_data.empty:
+            # Sort by Position (ascending - lower numbers = better ranking)
+            end_data_sorted = end_data.sort_values(by='Position', ascending=True)
+            
+            # Collect ALL URLs and positions
+            for idx, row in end_data_sorted.iterrows():
+                url = row['Results']
+                position = row['Position']
+                
+                if pd.notna(url) and pd.notna(position):
+                    domain = get_domain(url) if callable(get_domain) else urlparse(url).netloc
+                    
+                    end_urls.append({
+                        'url': url,
+                        'position': int(position) if isinstance(position, (int, float)) else position,
+                        'domain': domain or ''
+                    })
+        
+        # Return separate lists for both dates
+        return jsonify({
+            'success': True,
+            'keyword': keyword,
+            'start_date': start_date_str,
+            'end_date': end_date_str,
+            'start_urls': start_urls,
+            'end_urls': end_urls,
+            'start_count': len(start_urls),
+            'end_count': len(end_urls)
+        })
+        
+    except Exception as e:
+        import traceback
+        traceback_str = traceback.format_exc()
+        print(traceback_str)
+        return jsonify({'error': str(e), 'traceback': traceback_str})
+    try:
+        data = request.json
+        start_date_str = data.get('start_date')
+        end_date_str = data.get('end_date')
+        keyword = data.get('keyword')
+        
+        # Validation
+        if not all([start_date_str, end_date_str, keyword]):
+            return jsonify({'error': 'Start date, end date, and keyword are required'})
+        
+        # Load the Excel file
+        df = pd.read_excel('temp_upload.xlsx')
+        
+        # Print columns for debugging
+        print("Original columns:", df.columns.tolist())
+        
+        # Just work directly with letter columns to simplify
+        # A = Keyword, B = Time, C = Results (URLs), D = Position, E = Filled keyword
+        # Make sure we have the needed columns
+        required_cols = ['C', 'D', 'E']
+        for col in required_cols:
+            if col not in df.columns:
+                return jsonify({'error': f'Required column {col} not found in data'})
+        
+        # Filter by keyword (column E)
+        print(f"Filtering by E = '{keyword}'")
+        df_keyword = df[df['E'] == keyword]
+        
+        if df_keyword.empty:
+            return jsonify({'error': f'No data found for keyword "{keyword}"'})
+        
+        # For date matching, we'll use the B column (Time)
+        date_col = 'B'
+        
+        # Convert to datetime for matching
+        df_keyword['datetime'] = pd.to_datetime(df_keyword[date_col], errors='coerce')
+        df_keyword['date_str'] = df_keyword['datetime'].dt.strftime('%Y-%m-%d')
+        
+        # Print unique dates for debugging
+        print("Available dates:", df_keyword['date_str'].unique().tolist())
+        
+        # Filter by dates
+        start_data = df_keyword[df_keyword['date_str'] == start_date_str]
+        end_data = df_keyword[df_keyword['date_str'] == end_date_str]
+        
+        print(f"Found {len(start_data)} rows for start date and {len(end_data)} rows for end date")
+        
+        # If we didn't find exact matches, try to find dates containing the string
+        if start_data.empty:
+            print(f"No exact matches for start date, trying contains match for {start_date_str}")
+            start_data = df_keyword[df_keyword[date_col].astype(str).str.contains(start_date_str)]
+            print(f"Found {len(start_data)} rows after contains match")
+        
+        if end_data.empty:
+            print(f"No exact matches for end date, trying contains match for {end_date_str}")
+            end_data = df_keyword[df_keyword[date_col].astype(str).str.contains(end_date_str)]
+            print(f"Found {len(end_data)} rows after contains match")
+        
+        # If still empty, take two different days as fallback
+        if start_data.empty or end_data.empty:
+            unique_days = df_keyword['datetime'].dt.day.unique()
+            if len(unique_days) >= 2:
+                print("Using different days as fallback")
+                earliest_day = min(unique_days)
+                latest_day = max(unique_days)
+                
+                start_data = df_keyword[df_keyword['datetime'].dt.day == earliest_day]
+                end_data = df_keyword[df_keyword['datetime'].dt.day == latest_day]
+        
+        # ======== PREPARE START DATE DATA ========
+        start_urls = []
+        if not start_data.empty:
+            # Sort by Position (column D) - ascending (lower numbers = better ranking)
+            start_data = start_data.sort_values(by='D', ascending=True)
+            
+            # Simple collect ALL URLs from column C and positions from column D
+            for idx, row in start_data.iterrows():
+                start_urls.append({
+                    'url': row['C'],
+                    'position': int(row['D']) if pd.notna(row['D']) else None,
+                    'domain': urlparse(row['C']).netloc if pd.notna(row['C']) else ''
+                })
+        
+        # ======== PREPARE END DATE DATA ========
+        end_urls = []
+        if not end_data.empty:
+            # Sort by Position (column D) - ascending (lower numbers = better ranking)
+            end_data = end_data.sort_values(by='D', ascending=True)
+            
+            # Simple collect ALL URLs from column C and positions from column D
+            for idx, row in end_data.iterrows():
+                end_urls.append({
+                    'url': row['C'],
+                    'position': int(row['D']) if pd.notna(row['D']) else None,
+                    'domain': urlparse(row['C']).netloc if pd.notna(row['C']) else ''
+                })
+        
+        # Return separate lists for both dates
+        return jsonify({
+            'success': True,
+            'keyword': keyword,
+            'start_date': start_date_str,
+            'end_date': end_date_str,
+            'start_urls': start_urls,
+            'end_urls': end_urls,
+            'start_count': len(start_urls),
+            'end_count': len(end_urls)
+        })
+        
+    except Exception as e:
+        import traceback
+        traceback_str = traceback.format_exc()
+        print(traceback_str)
+        return jsonify({'error': str(e), 'traceback': traceback_str})
+    try:
+        data = request.json
+        start_date_str = data.get('start_date')
+        end_date_str = data.get('end_date')
+        keyword = data.get('keyword')
+        
+        # Validation
+        if not all([start_date_str, end_date_str, keyword]):
+            return jsonify({'error': 'Start date, end date, and keyword are required'})
+        
+        # Load the Excel file
+        original_df = pd.read_excel('temp_upload.xlsx')
+        
+        # Print column names for debugging
+        print("Original columns:", original_df.columns.tolist())
+        
+        # Detect data structure based on column names
+        df = original_df.copy()
+        
+        # If we have standard column names, rename them to our expected format
+        if 'Keyword' in df.columns and 'Time' in df.columns and 'Results' in df.columns and 'Position' in df.columns:
+            # Standard format
+            pass
+        elif 'A' in df.columns and 'B' in df.columns and 'C' in df.columns and 'D' in df.columns and 'E' in df.columns:
+            # Excel-style column names (A, B, C, D, E, etc.)
+            col_map = {
+                'A': 'Keyword',
+                'B': 'Time',
+                'C': 'Results',
+                'D': 'Position',
+                'E': 'Filled keyword',
+                'F': 'date/time'
+            }
+            df = df.rename(columns=col_map)
+        
+        # Check if we have necessary columns
+        if 'Results' not in df.columns or 'Position' not in df.columns:
+            print("Required columns not found. Available columns:", df.columns.tolist())
+            return jsonify({'error': 'Required columns not found in data'})
+        
+        # Determine which column to use for keyword filtering
+        # First try 'Filled keyword', then 'Keyword'
+        keyword_column = 'Filled keyword' if 'Filled keyword' in df.columns else 'Keyword'
+        
+        if keyword_column not in df.columns:
+            return jsonify({'error': f'Keyword column not found in data. Available columns: {df.columns.tolist()}'})
+        
+        # Filter by keyword
+        print(f"Filtering by {keyword_column} = '{keyword}'")
+        keyword_df = df[df[keyword_column] == keyword]
+        
+        print(f"Found {len(keyword_df)} rows for keyword '{keyword}'")
+        if keyword_df.empty:
+            return jsonify({'error': f'No data for keyword "{keyword}" in column {keyword_column}'})
+        
+        # Determine which column has date information
+        date_columns = []
+        for col in ['Time', 'date/time', 'date']:
+            if col in keyword_df.columns:
+                date_columns.append(col)
+        
+        if not date_columns:
+            return jsonify({'error': 'No date columns found in data'})
+        
+        print(f"Available date columns: {date_columns}")
+        
+        # Try each date column until we find matches
+        found_start = False
+        found_end = False
+        start_data = pd.DataFrame()
+        end_data = pd.DataFrame()
+        
+        for date_col in date_columns:
+            print(f"Trying date column: {date_col}")
+            
+            # Print unique date values for debugging
+            unique_dates = keyword_df[date_col].unique()
+            print(f"Unique {date_col} values ({len(unique_dates)}): {unique_dates[:10]}")
+            
+            # Convert dates to strings for comparison to handle different formats
+            keyword_df['date_str'] = keyword_df[date_col].astype(str)
+            
+            # Show some sample date strings
+            print(f"Sample date strings: {keyword_df['date_str'].iloc[:5].tolist()}")
+            
+            # Try multiple date formats for start_date
+            start_date_formats = [
+                start_date_str,
+                pd.to_datetime(start_date_str).strftime('%Y-%m-%d'),
+                pd.to_datetime(start_date_str).strftime('%m/%d/%Y'),
+                pd.to_datetime(start_date_str).strftime('%Y/%m/%d')
+            ]
+            
+            end_date_formats = [
+                end_date_str,
+                pd.to_datetime(end_date_str).strftime('%Y-%m-%d'),
+                pd.to_datetime(end_date_str).strftime('%m/%d/%Y'),
+                pd.to_datetime(end_date_str).strftime('%Y/%m/%d')
+            ]
+            
+            # Try multiple ways to match the date
+            # Method 1: Direct string contains matching
+            for start_format in start_date_formats:
+                temp_start = keyword_df[keyword_df['date_str'].str.contains(start_format, na=False)]
+                if not temp_start.empty:
+                    print(f"Found {len(temp_start)} rows with date {start_format}")
+                    start_data = temp_start
+                    found_start = True
+                    break
+            
+            for end_format in end_date_formats:
+                temp_end = keyword_df[keyword_df['date_str'].str.contains(end_format, na=False)]
+                if not temp_end.empty:
+                    print(f"Found {len(temp_end)} rows with date {end_format}")
+                    end_data = temp_end
+                    found_end = True
+                    break
+            
+            if found_start and found_end:
+                break
+            
+            # Method 2: Convert to datetime and compare
+            if not (found_start and found_end):
+                try:
+                    keyword_df['date_dt'] = pd.to_datetime(keyword_df[date_col], errors='coerce')
+                    keyword_df['date_only'] = keyword_df['date_dt'].dt.date
+                    
+                    start_date_dt = pd.to_datetime(start_date_str).date()
+                    end_date_dt = pd.to_datetime(end_date_str).date()
+                    
+                    # Show some converted dates
+                    print(f"Converted dates sample: {keyword_df['date_only'].iloc[:5].tolist()}")
+                    print(f"Looking for dates: {start_date_dt} and {end_date_dt}")
+                    
+                    if not found_start:
+                        temp_start = keyword_df[keyword_df['date_only'] == start_date_dt]
+                        if not temp_start.empty:
+                            print(f"Found {len(temp_start)} rows matching start date")
+                            start_data = temp_start
+                            found_start = True
+                    
+                    if not found_end:
+                        temp_end = keyword_df[keyword_df['date_only'] == end_date_dt]
+                        if not temp_end.empty:
+                            print(f"Found {len(temp_end)} rows matching end date")
+                            end_data = temp_end
+                            found_end = True
+                except Exception as e:
+                    print(f"Error in datetime conversion: {e}")
+            
+            if found_start and found_end:
+                break
+        
+        # If still no matches, try more lenient matching
+        if not (found_start and found_end):
+            # Try partial date matching (just the day)
+            start_day = pd.to_datetime(start_date_str).day
+            end_day = pd.to_datetime(end_date_str).day
+            
+            print(f"Trying to match just the day: start={start_day}, end={end_day}")
+            
+            for date_col in date_columns:
+                try:
+                    keyword_df['date_dt'] = pd.to_datetime(keyword_df[date_col], errors='coerce')
+                    
+                    if not found_start:
+                        temp_start = keyword_df[keyword_df['date_dt'].dt.day == start_day]
+                        if not temp_start.empty:
+                            print(f"Found {len(temp_start)} rows matching start day {start_day}")
+                            start_data = temp_start
+                            found_start = True
+                    
+                    if not found_end:
+                        temp_end = keyword_df[keyword_df['date_dt'].dt.day == end_day]
+                        if not temp_end.empty:
+                            print(f"Found {len(temp_end)} rows matching end day {end_day}")
+                            end_data = temp_end
+                            found_end = True
+                except Exception as e:
+                    print(f"Error in day matching: {e}")
+                
+                if found_start and found_end:
+                    break
+        
+        # Last resort: Return the first and last dates in the dataset
+        if not (found_start or found_end):
+            print("No matches found - using first/last dates in dataset as fallback")
+            try:
+                for date_col in date_columns:
+                    keyword_df['date_dt'] = pd.to_datetime(keyword_df[date_col], errors='coerce')
+                    keyword_df = keyword_df.sort_values('date_dt')
+                    
+                    # Take earliest date for start and latest for end
+                    if not found_start:
+                        start_data = keyword_df.head(len(keyword_df) // 2)  # First half
+                        found_start = True
+                    
+                    if not found_end:
+                        end_data = keyword_df.tail(len(keyword_df) // 2)  # Second half
+                        found_end = True
+                    
+                    if found_start and found_end:
+                        break
+            except Exception as e:
+                print(f"Error in fallback date handling: {e}")
+        
+        # Debug: Check number of rows found
+        print(f"Final start date data rows: {len(start_data)}")
+        print(f"Final end date data rows: {len(end_data)}")
+        
+        if start_data.empty and end_data.empty:
+            # As a last resort, just use all the data split into two parts
+            print("Both dates still empty - splitting all data")
+            start_data = keyword_df.iloc[:len(keyword_df)//2]
+            end_data = keyword_df.iloc[len(keyword_df)//2:]
+        
+        # ======== PREPARE START DATE DATA ========
+        start_urls = []
+        if not start_data.empty:
+            # Sort by Position (ascending)
+            start_data_sorted = start_data.sort_values(by='Position', ascending=True)
+            
+            # Get all URLs and positions
+            for idx, row in start_data_sorted.iterrows():
+                start_urls.append({
+                    'url': row['Results'],
+                    'position': int(row['Position']) if isinstance(row['Position'], (int, float)) else None,
+                    'domain': row.get('domain', '')
+                })
+        
+        # ======== PREPARE END DATE DATA ========
+        end_urls = []
+        if not end_data.empty:
+            # Sort by Position (ascending)
+            end_data_sorted = end_data.sort_values(by='Position', ascending=True)
+            
+            # Get all URLs and positions
+            for idx, row in end_data_sorted.iterrows():
+                end_urls.append({
+                    'url': row['Results'],
+                    'position': int(row['Position']) if isinstance(row['Position'], (int, float)) else None,
+                    'domain': row.get('domain', '')
+                })
+        
+        # Return separate lists for both dates
+        return jsonify({
+            'success': True,
+            'keyword': keyword,
+            'start_date': start_date_str,
+            'end_date': end_date_str,
+            'start_urls': start_urls,
+            'end_urls': end_urls,
+            'start_count': len(start_urls),
+            'end_count': len(end_urls)
+        })
+        
+    except Exception as e:
+        import traceback
+        traceback_str = traceback.format_exc()
+        print(traceback_str)
+        return jsonify({'error': str(e), 'traceback': traceback_str})
+    try:
+        data = request.json
+        start_date_str = data.get('start_date')
+        end_date_str = data.get('end_date')
+        keyword = data.get('keyword')
+        
+        # Validation
+        if not all([start_date_str, end_date_str, keyword]):
+            return jsonify({'error': 'Start date, end date, and keyword are required'})
+        
+        # Load the Excel file
+        original_df = pd.read_excel('temp_upload.xlsx')
+        
+        # Print column names for debugging
+        print("Original columns:", original_df.columns.tolist())
+        
+        # Detect data structure based on column names
+        df = original_df.copy()
+        
+        # If we have standard column names, rename them to our expected format
+        if 'Keyword' in df.columns and 'Time' in df.columns and 'Results' in df.columns and 'Position' in df.columns:
+            # Standard format
+            pass
+        elif 'A' in df.columns and 'B' in df.columns and 'C' in df.columns and 'D' in df.columns and 'E' in df.columns:
+            # Excel-style column names (A, B, C, D, E, etc.)
+            col_map = {
+                'A': 'Keyword',
+                'B': 'Time',
+                'C': 'Results',
+                'D': 'Position',
+                'E': 'Filled keyword'
+            }
+            df = df.rename(columns=col_map)
+        
+        # Check if we have necessary columns
+        if 'Results' not in df.columns or 'Position' not in df.columns:
+            print("Required columns not found. Available columns:", df.columns.tolist())
+            return jsonify({'error': 'Required columns not found in data'})
+        
+        # Process the data (convert dates, etc.)
+        df = prepare_data(df)
+        
+        # Determine which column to use for keyword filtering
+        # First try 'Filled keyword', then 'Keyword'
+        keyword_column = 'Filled keyword' if 'Filled keyword' in df.columns else 'Keyword'
+        
+        if keyword_column not in df.columns:
+            return jsonify({'error': f'Keyword column not found in data. Available columns: {df.columns.tolist()}'})
+        
+        # Filter by keyword
+        print(f"Filtering by {keyword_column} = '{keyword}'")
+        keyword_df = df[df[keyword_column] == keyword]
+        
+        print(f"Found {len(keyword_df)} rows for keyword '{keyword}'")
+        if keyword_df.empty:
+            return jsonify({'error': f'No data for keyword "{keyword}" in column {keyword_column}'})
+        
+        # Convert date fields to datetime
+        date_column = None
+        for col in ['date', 'Time', 'date/time']:
+            if col in keyword_df.columns and not keyword_df[col].isnull().all():
+                date_column = col
+                break
+                
+        if not date_column:
+            return jsonify({'error': 'No valid date column found'})
+            
+        print(f"Using date column: {date_column}")
+        
+        # Convert the selected date strings to datetime objects
+        try:
+            start_date = pd.to_datetime(start_date_str).date()
+            end_date = pd.to_datetime(end_date_str).date()
+        except Exception as e:
+            print(f"Error parsing dates: {e}")
+            return jsonify({'error': f'Error parsing dates: {e}'})
+        
+        print(f"Looking for date matches: {start_date} and {end_date}")
+        
+        # Filter for dates that match our start and end dates
+        if date_column == 'date':
+            # Already a date object
+            start_data = keyword_df[keyword_df['date'] == start_date].copy()
+            end_data = keyword_df[keyword_df['date'] == end_date].copy()
+        else:
+            # Need to convert to date objects for comparison
+            start_data = keyword_df[pd.to_datetime(keyword_df[date_column]).dt.date == start_date].copy()
+            end_data = keyword_df[pd.to_datetime(keyword_df[date_column]).dt.date == end_date].copy()
+        
+        # Debug: Check number of rows for each filtered date
+        print(f"Rows for start date {start_date}: {len(start_data)}")
+        print(f"Rows for end date {end_date}: {len(end_data)}")
+        
+        if start_data.empty and end_data.empty:
+            return jsonify({'error': f'No data for dates: {start_date_str} / {end_date_str}'})
+        
+        # ======== PREPARE START DATE DATA ========
+        start_urls = []
+        if not start_data.empty:
+            # Sort by Position (ascending)
+            start_data_sorted = start_data.sort_values(by='Position', ascending=True)
+            
+            # Get all URLs and positions
+            for idx, row in start_data_sorted.iterrows():
+                start_urls.append({
+                    'url': row['Results'],
+                    'position': int(row['Position']) if isinstance(row['Position'], (int, float)) else None,
+                    'domain': row.get('domain', '')
+                })
+        
+        # ======== PREPARE END DATE DATA ========
+        end_urls = []
+        if not end_data.empty:
+            # Sort by Position (ascending)
+            end_data_sorted = end_data.sort_values(by='Position', ascending=True)
+            
+            # Get all URLs and positions
+            for idx, row in end_data_sorted.iterrows():
+                end_urls.append({
+                    'url': row['Results'],
+                    'position': int(row['Position']) if isinstance(row['Position'], (int, float)) else None,
+                    'domain': row.get('domain', '')
+                })
+        
+        # Return separate lists for both dates
+        return jsonify({
+            'success': True,
+            'keyword': keyword,
+            'start_date': start_date_str,
+            'end_date': end_date_str,
+            'start_urls': start_urls,
+            'end_urls': end_urls,
+            'start_count': len(start_urls),
+            'end_count': len(end_urls)
+        })
+        
+    except Exception as e:
+        import traceback
+        traceback_str = traceback.format_exc()
+        print(traceback_str)
+        return jsonify({'error': str(e), 'traceback': traceback_str})
+    try:
+        data = request.json
+        start_date_str = data.get('start_date')
+        end_date_str = data.get('end_date')
+        keyword = data.get('keyword')
+        
+        # Validation
         if not all([start_date_str, end_date_str, keyword]):
             return jsonify({'error': 'Start date, end date, and keyword are required'})
         
@@ -2633,13 +4207,13 @@ def compare_over_time():
         df = prepare_data(df)
         
         # Filter by keyword
-        df = df[df['Keyword'] == keyword]
-        if df.empty:
+        keyword_df = df[df['Keyword'] == keyword]
+        if keyword_df.empty:
             return jsonify({'error': f'No data for keyword "{keyword}"'})
         
         # Convert the 'Time' column to date objects
         if 'Time' in df.columns:
-            df['date'] = pd.to_datetime(df['Time'], errors='coerce').dt.date
+            keyword_df['date'] = pd.to_datetime(keyword_df['Time'], errors='coerce').dt.date
         else:
             return jsonify({'error': 'No date information found'})
         
@@ -2648,54 +4222,61 @@ def compare_over_time():
         end_date = pd.to_datetime(end_date_str).date()
         
         # Filter the DataFrame for the two selected dates
-        start_data = df[df['date'] == start_date].copy()
-        end_data = df[df['date'] == end_date].copy()
+        start_data = keyword_df[keyword_df['date'] == start_date].copy()
+        end_data = keyword_df[keyword_df['date'] == end_date].copy()
         
         # Debug: Check number of rows for each filtered date
-        print("Rows for start date:", len(start_data))
-        print("Rows for end date:", len(end_data))
+        print(f"Rows for start date {start_date}: {len(start_data)}")
+        print(f"Rows for end date {end_date}: {len(end_data)}")
         
-        if start_data.empty or end_data.empty:
-            return jsonify({'error': f'No data for one or both dates: {start_date_str} / {end_date_str}'})
+        if start_data.empty and end_data.empty:
+            return jsonify({'error': f'No data for dates: {start_date_str} / {end_date_str}'})
         
-        # Continue with sorting and building the rank table...
-        start_data_sorted = start_data.sort_values(by='Position', ascending=True)
-        end_data_sorted = end_data.sort_values(by='Position', ascending=True)
-        
-        start_list = start_data_sorted[['Results', 'Position']].values.tolist()
-        end_list   = end_data_sorted[['Results', 'Position']].values.tolist()
-        
-        max_len = max(len(start_list), len(end_list))
-        rank_table = []
-        for i in range(max_len):
-            if i < len(start_list):
-                url_start, pos_start = start_list[i]
-            else:
-                url_start, pos_start = None, None
+        # ======== PREPARE START DATE DATA ========
+        start_urls = []
+        if not start_data.empty:
+            # Sort by Position (ascending)
+            start_data_sorted = start_data.sort_values(by='Position', ascending=True)
             
-            if i < len(end_list):
-                url_end, pos_end = end_list[i]
-            else:
-                url_end, pos_end = None, None
-            
-            change_str = ""
-            if isinstance(pos_start, (int, float)) and isinstance(pos_end, (int, float)):
-                diff = pos_end - pos_start
-                change_str = f"{diff:+.0f}"
-            
-            rank_table.append({
-                "rank": i + 1,
-                "url_start": url_start or "",
-                "url_end": url_end or "",
-                "change": change_str
-            })
+            # Get all URLs and positions
+            for idx, row in start_data_sorted.iterrows():
+                start_urls.append({
+                    'url': row['Results'],
+                    'position': int(row['Position']) if isinstance(row['Position'], (int, float)) else None,
+                    'domain': row.get('domain', ''),
+                })
         
-        return jsonify({"success": True, "rank_table": rank_table})
+        # ======== PREPARE END DATE DATA ========
+        end_urls = []
+        if not end_data.empty:
+            # Sort by Position (ascending)
+            end_data_sorted = end_data.sort_values(by='Position', ascending=True)
+            
+            # Get all URLs and positions
+            for idx, row in end_data_sorted.iterrows():
+                end_urls.append({
+                    'url': row['Results'],
+                    'position': int(row['Position']) if isinstance(row['Position'], (int, float)) else None,
+                    'domain': row.get('domain', ''),
+                })
+        
+        # Return separate lists for both dates
+        return jsonify({
+            'success': True,
+            'keyword': keyword,
+            'start_date': start_date_str,
+            'end_date': end_date_str,
+            'start_urls': start_urls,
+            'end_urls': end_urls,
+            'start_count': len(start_urls),
+            'end_count': len(end_urls)
+        })
+        
     except Exception as e:
+        import traceback
+        print(traceback.format_exc())
         return jsonify({'error': str(e)})
 
-if __name__ == '__main__':
-    app.run(debug=True, port=8080)
 
 
 if __name__ == '__main__':
