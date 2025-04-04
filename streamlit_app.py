@@ -349,7 +349,7 @@ def main():
             st.header("Time Comparison")
             
             # Keyword selector
-            if 'Keyword' in df.columns and 'date' in df.columns:
+            if 'Keyword' in df.columns:
                 col1, col2, col3 = st.columns(3)
                 
                 with col1:
@@ -363,137 +363,178 @@ def main():
                     keyword_df = df[df['Keyword'] == selected_keyword]
                     
                     if not keyword_df.empty:
-                        # Get unique dates for this keyword
-                        available_dates = sorted(keyword_df['date'].dropna().unique())
-                        date_strings = [d.strftime('%Y-%m-%d') if isinstance(d, datetime.date) else str(d).split(' ')[0] 
-                                       for d in available_dates]
+                        # Debug: Show what date column contains
+                        if st.checkbox("Debug: Show Date Information"):
+                            st.write("Date column information:")
+                            if 'date' in keyword_df.columns:
+                                st.write(f"Date column exists with {keyword_df['date'].nunique()} unique values")
+                                st.write("Sample dates:", keyword_df['date'].dropna().unique()[:5])
+                            elif 'Time' in keyword_df.columns:
+                                st.write(f"Time column exists with {keyword_df['Time'].nunique()} unique values")
+                                st.write("Sample times:", keyword_df['Time'].dropna().unique()[:5])
+                            else:
+                                st.write("No date or time columns found")
                         
-                        # Date selectors
-                        with col2:
-                            start_date = st.selectbox("Start Date", 
-                                                    ["-- Select start date --"] + date_strings,
-                                                    key="time_comparison_start_date")
+                        # Extract dates from either 'date' or 'Time' column
+                        date_column = 'date' if 'date' in keyword_df.columns else 'Time' if 'Time' in keyword_df.columns else None
                         
-                        with col3:
-                            end_date = st.selectbox("End Date", 
-                                                  ["-- Select end date --"] + date_strings,
-                                                  key="time_comparison_end_date")
-                        
-                        # Compare button
-                        if start_date != "-- Select start date --" and end_date != "-- Select end date --":
-                            if st.button("Compare Over Time"):
-                                # Convert string dates to datetime.date objects
-                                start_date_obj = datetime.datetime.strptime(start_date, '%Y-%m-%d').date()
-                                end_date_obj = datetime.datetime.strptime(end_date, '%Y-%m-%d').date()
+                        if date_column:
+                            # Create a list of available dates
+                            available_dates = keyword_df[date_column].dropna().unique()
+                            
+                            # Format dates for display in selectbox
+                            date_strings = []
+                            for d in available_dates:
+                                try:
+                                    if isinstance(d, datetime.datetime) or isinstance(d, datetime.date):
+                                        date_strings.append(d.strftime('%Y-%m-%d'))
+                                    elif isinstance(d, str):
+                                        # Try to parse string as date
+                                        date_strings.append(pd.to_datetime(d).strftime('%Y-%m-%d'))
+                                    else:
+                                        date_strings.append(str(d))
+                                except:
+                                    # If can't format, use string representation
+                                    date_strings.append(str(d))
+                            
+                            date_strings = sorted(list(set(date_strings)))  # Remove duplicates and sort
+                            
+                            if date_strings:
+                                # Date selectors
+                                with col2:
+                                    start_date = st.selectbox("Start Date", 
+                                                            ["-- Select start date --"] + date_strings,
+                                                            key="time_comparison_start_date")
                                 
-                                # Filter data for the selected dates
-                                start_data = keyword_df[keyword_df['date'] == start_date_obj].copy()
-                                end_data = keyword_df[keyword_df['date'] == end_date_obj].copy()
+                                with col3:
+                                    end_date = st.selectbox("End Date", 
+                                                          ["-- Select end date --"] + date_strings,
+                                                          key="time_comparison_end_date")
                                 
-                                # Check if data is available for both dates
-                                if start_data.empty or end_data.empty:
-                                    st.warning(f"No data for one or both dates: {start_date} / {end_date}")
-                                else:
-                                    # Sort data by position (ascending)
-                                    start_data_sorted = start_data.sort_values(by='Position', ascending=True)
-                                    end_data_sorted = end_data.sort_values(by='Position', ascending=True)
-                                    
-                                    # Extract URLs and positions
-                                    start_list = start_data_sorted[['Results', 'Position']].values.tolist()
-                                    end_list = end_data_sorted[['Results', 'Position']].values.tolist()
-                                    
-                                    # Build comparison table
-                                    max_len = max(len(start_list), len(end_list))
-                                    rank_table = []
-                                    
-                                    for i in range(max_len):
-                                        if i < len(start_list):
-                                            url_start, pos_start = start_list[i]
+                                # Compare button
+                                if start_date != "-- Select start date --" and end_date != "-- Select end date --":
+                                    if st.button("Compare Over Time"):
+                                        # Use more flexible date comparison
+                                        # Filter by matching the string format of dates
+                                        start_data = keyword_df[keyword_df[date_column].astype(str).str.startswith(start_date.split(' ')[0])].copy()
+                                        end_data = keyword_df[keyword_df[date_column].astype(str).str.startswith(end_date.split(' ')[0])].copy()
+                                        
+                                        # Debug info
+                                        if st.checkbox("Show detailed debug info"):
+                                            st.write(f"Filtering for start date '{start_date}' found {len(start_data)} rows")
+                                            st.write(f"Filtering for end date '{end_date}' found {len(end_data)} rows")
+                                        
+                                        # Check if data is available for both dates
+                                        if start_data.empty or end_data.empty:
+                                            st.warning(f"No data found for dates: {start_date} / {end_date}")
+                                            
+                                            # Offer suggestions
+                                            st.info("Available dates format might be different. Try using the Debug checkbox above to see date formats in your data.")
                                         else:
-                                            url_start, pos_start = None, None
-                                        
-                                        if i < len(end_list):
-                                            url_end, pos_end = end_list[i]
-                                        else:
-                                            url_end, pos_end = None, None
-                                        
-                                        # Calculate position change
-                                        change_str = ""
-                                        if isinstance(pos_start, (int, float)) and isinstance(pos_end, (int, float)):
-                                            diff = pos_end - pos_start
-                                            change_str = f"{diff:+.0f}"  # Format as +X or -X
-                                        
-                                        rank_table.append({
-                                            "rank": i + 1,
-                                            "url_start": url_start or "",
-                                            "url_end": url_end or "",
-                                            "change": change_str
-                                        })
-                                    
-                                    # Display the comparison table
-                                    st.subheader(f"Comparison: {start_date} vs {end_date}")
-                                    rank_df = pd.DataFrame(rank_table)
-                                    rank_df.columns = ["Rank", "URL (Start Date)", "URL (End Date)", "Position Change"]
-                                    
-                                    # Apply color to position changes
-                                    def highlight_changes(val):
-                                        if isinstance(val, str) and val.startswith('+'):
-                                            return 'color: red'  # Worse position (higher number)
-                                        elif isinstance(val, str) and val.startswith('-'):
-                                            return 'color: green'  # Better position (lower number)
-                                        return ''
-                                    
-                                    st.dataframe(rank_df.style.applymap(highlight_changes, subset=['Position Change']), 
-                                                use_container_width=True)
-                                    
-                                    # Add a visualization
-                                    if len(rank_table) > 0:
-                                        st.subheader("Top 10 Position Changes")
-                                        # Create a bar chart for position changes
-                                        changes_data = []
-                                        
-                                        for row in rank_table[:10]:  # Take top 10 positions
-                                            if row["change"] and row["url_start"] and row["url_end"]:
-                                                try:
-                                                    changes_data.append({
-                                                        "rank": row["rank"],
-                                                        "url": row["url_start"],
-                                                        "change": float(row["change"])
-                                                    })
-                                                except:
-                                                    pass
-                                        
-                                        if changes_data:
-                                            changes_df = pd.DataFrame(changes_data)
-                                            fig = px.bar(
-                                                changes_df,
-                                                x="rank",
-                                                y="change",
-                                                color="change",
-                                                color_continuous_scale="RdYlGn_r",
-                                                labels={"rank": "Position Rank", "change": "Position Change", "url": "URL"},
-                                                title=f"Position Changes for Top 10 URLs ({start_date} to {end_date})",
-                                                hover_data=["url"]
-                                            )
+                                            # Sort data by position (ascending)
+                                            start_data_sorted = start_data.sort_values(by='Position', ascending=True)
+                                            end_data_sorted = end_data.sort_values(by='Position', ascending=True)
                                             
-                                            fig.update_layout(
-                                                yaxis_title="Position Change (negative is better)",
-                                                xaxis_title="Position Rank"
-                                            )
+                                            # Extract URLs and positions
+                                            start_list = start_data_sorted[['Results', 'Position']].values.tolist()
+                                            end_list = end_data_sorted[['Results', 'Position']].values.tolist()
                                             
-                                            # Add a horizontal line at y=0
-                                            fig.add_shape(
-                                                type="line",
-                                                x0=0.5,
-                                                y0=0,
-                                                x1=10.5,
-                                                y1=0,
-                                                line=dict(color="black", width=1, dash="dash")
-                                            )
+                                            # Build comparison table
+                                            max_len = max(len(start_list), len(end_list))
+                                            rank_table = []
                                             
-                                            st.plotly_chart(fig, use_container_width=True)
+                                            for i in range(max_len):
+                                                if i < len(start_list):
+                                                    url_start, pos_start = start_list[i]
+                                                else:
+                                                    url_start, pos_start = None, None
+                                                
+                                                if i < len(end_list):
+                                                    url_end, pos_end = end_list[i]
+                                                else:
+                                                    url_end, pos_end = None, None
+                                                
+                                                # Calculate position change
+                                                change_str = ""
+                                                if isinstance(pos_start, (int, float)) and isinstance(pos_end, (int, float)):
+                                                    diff = pos_end - pos_start
+                                                    change_str = f"{diff:+.0f}"  # Format as +X or -X
+                                                
+                                                rank_table.append({
+                                                    "rank": i + 1,
+                                                    "url_start": url_start or "",
+                                                    "url_end": url_end or "",
+                                                    "change": change_str
+                                                })
+                                            
+                                            # Display the comparison table
+                                            st.subheader(f"Comparison: {start_date} vs {end_date}")
+                                            rank_df = pd.DataFrame(rank_table)
+                                            rank_df.columns = ["Rank", "URL (Start Date)", "URL (End Date)", "Position Change"]
+                                            
+                                            # Apply color to position changes
+                                            def highlight_changes(val):
+                                                if isinstance(val, str) and val.startswith('+'):
+                                                    return 'color: red'  # Worse position (higher number)
+                                                elif isinstance(val, str) and val.startswith('-'):
+                                                    return 'color: green'  # Better position (lower number)
+                                                return ''
+                                            
+                                            st.dataframe(rank_df.style.applymap(highlight_changes, subset=['Position Change']), 
+                                                        use_container_width=True)
+                                            
+                                            # Add a visualization
+                                            if len(rank_table) > 0:
+                                                st.subheader("Top 10 Position Changes")
+                                                # Create a bar chart for position changes
+                                                changes_data = []
+                                                
+                                                for row in rank_table[:10]:  # Take top 10 positions
+                                                    if row["change"] and row["url_start"] and row["url_end"]:
+                                                        try:
+                                                            changes_data.append({
+                                                                "rank": row["rank"],
+                                                                "url": row["url_start"],
+                                                                "change": float(row["change"])
+                                                            })
+                                                        except:
+                                                            pass
+                                                
+                                                if changes_data:
+                                                    changes_df = pd.DataFrame(changes_data)
+                                                    fig = px.bar(
+                                                        changes_df,
+                                                        x="rank",
+                                                        y="change",
+                                                        color="change",
+                                                        color_continuous_scale="RdYlGn_r",
+                                                        labels={"rank": "Position Rank", "change": "Position Change", "url": "URL"},
+                                                        title=f"Position Changes for Top 10 URLs ({start_date} to {end_date})",
+                                                        hover_data=["url"]
+                                                    )
+                                                    
+                                                    fig.update_layout(
+                                                        yaxis_title="Position Change (negative is better)",
+                                                        xaxis_title="Position Rank"
+                                                    )
+                                                    
+                                                    # Add a horizontal line at y=0
+                                                    fig.add_shape(
+                                                        type="line",
+                                                        x0=0.5,
+                                                        y0=0,
+                                                        x1=10.5,
+                                                        y1=0,
+                                                        line=dict(color="black", width=1, dash="dash")
+                                                    )
+                                                    
+                                                    st.plotly_chart(fig, use_container_width=True)
+                            else:
+                                st.warning(f"No dates found for keyword '{selected_keyword}'")
+                        else:
+                            st.warning("No date or time column found in the data")
             else:
-                st.warning("Required columns (Keyword or date) not found in data")
+                st.warning("Keyword column not found in data")
 
 if __name__ == "__main__":
     main()
