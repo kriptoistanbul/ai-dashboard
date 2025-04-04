@@ -12,6 +12,10 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
 
+# Google Sheet Configuration
+SHEET_ID = "1Z8S-lJygDcuB3gs120EoXLVMtZzgp7HQrjtNkkOqJQs"
+SHEET_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/edit#gid=0"
+
 # Set page configuration
 st.set_page_config(
     page_title="Advanced SEO Position Tracker",
@@ -213,19 +217,21 @@ def load_data_from_gsheet():
         def fetch_sheet_data():
             # Setup the Sheets API
             scope = ['https://spreadsheets.google.com/feeds',
-                    'https://www.googleapis.com/auth/drive']
+                     'https://www.googleapis.com/auth/drive']
             
-            # In a real app, you'd set this up properly with your own credentials
-            # For demonstration, we'll use a fallback to static data
             try:
+                # Try to authenticate and access the sheet
                 credentials = ServiceAccountCredentials.from_json_keyfile_name('google_credentials.json', scope)
                 client = gspread.authorize(credentials)
-                sheet = client.open('SEO Position Data').sheet1
+                
+                # Open by sheet ID instead of name
+                sheet = client.open_by_key(SHEET_ID).sheet1
                 data = sheet.get_all_records()
                 return pd.DataFrame(data)
+                
             except Exception as e:
-                st.warning(f"Could not connect to Google Sheets: {e}")
-                st.info("Using sample data instead.")
+                st.warning(f"Could not connect to the specified Google Sheet: {e}")
+                st.info("Using sample data instead. To use your own data, ensure proper credentials are set up.")
                 
                 # Generate sample data if Google Sheets connection fails
                 return generate_sample_data()
@@ -355,7 +361,7 @@ def main():
                         st.error(f"Error processing file: {str(e)}")
             
             elif data_source == "Connect to Google Sheets":
-                st.info("Connecting to Google Sheets...")
+                st.info(f"Connecting to Google Sheet: {SHEET_URL}")
                 
                 with st.spinner("Loading data from Google Sheets..."):
                     df = load_data_from_gsheet()
