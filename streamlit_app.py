@@ -8,13 +8,7 @@ import numpy as np
 import io
 import re
 import datetime
-import gspread
-from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
-
-# Google Sheet Configuration
-SHEET_ID = "1Z8S-lJygDcuB3gs120EoXLVMtZzgp7HQrjtNkkOqJQs"
-SHEET_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/edit#gid=0"
 
 # Set page configuration
 st.set_page_config(
@@ -209,38 +203,6 @@ def apply_domain_filter(df, domain):
     
     return df[df['domain'] == domain]
 
-def load_data_from_gsheet():
-    """Load data from Google Sheets"""
-    try:
-        # Use caching to prevent reloading the data on every UI interaction
-        @st.cache_data(ttl=300)
-        def fetch_sheet_data():
-            # Setup the Sheets API
-            scope = ['https://spreadsheets.google.com/feeds',
-                     'https://www.googleapis.com/auth/drive']
-            
-            try:
-                # Try to authenticate and access the sheet
-                credentials = ServiceAccountCredentials.from_json_keyfile_name('google_credentials.json', scope)
-                client = gspread.authorize(credentials)
-                
-                # Open by sheet ID instead of name
-                sheet = client.open_by_key(SHEET_ID).sheet1
-                data = sheet.get_all_records()
-                return pd.DataFrame(data)
-                
-            except Exception as e:
-                st.warning(f"Could not connect to the specified Google Sheet: {e}")
-                st.info("Using sample data instead. To use your own data, ensure proper credentials are set up.")
-                
-                # Generate sample data if Google Sheets connection fails
-                return generate_sample_data()
-        
-        return fetch_sheet_data()
-    except Exception as e:
-        st.error(f"Error loading data: {e}")
-        return pd.DataFrame()
-
 def generate_sample_data():
     """Generate sample SEO position data for demonstration"""
     # Create sample keywords, domains, and dates
@@ -313,8 +275,8 @@ def main():
             
             data_source = st.radio(
                 "Select Data Source",
-                ["Upload Excel File", "Connect to Google Sheets", "Use Sample Data"],
-                index=2
+                ["Upload Excel File", "Use Sample Data"],
+                index=0
             )
             
             if data_source == "Upload Excel File":
@@ -359,41 +321,6 @@ def main():
                     
                     except Exception as e:
                         st.error(f"Error processing file: {str(e)}")
-            
-            elif data_source == "Connect to Google Sheets":
-                st.info(f"Connecting to Google Sheet: {SHEET_URL}")
-                
-                with st.spinner("Loading data from Google Sheets..."):
-                    df = load_data_from_gsheet()
-                    
-                    if not df.empty:
-                        st.session_state.data = df
-                        
-                        # Process the data
-                        processed_df = prepare_data(df)
-                        st.session_state.processed_data = processed_df
-                        
-                        # Extract unique values for filters
-                        if 'Keyword' in processed_df.columns:
-                            st.session_state.keywords = ["All Keywords"] + sorted(processed_df['Keyword'].unique().tolist())
-                        
-                        if 'date' in processed_df.columns:
-                            dates = sorted(processed_df['date'].dropna().unique())
-                            st.session_state.dates = [d.strftime('%Y-%m-%d') if isinstance(d, datetime.date) else str(d).split(' ')[0] 
-                                          for d in dates]
-                        
-                        if 'Results' in processed_df.columns:
-                            st.session_state.urls = sorted(processed_df['Results'].dropna().unique().tolist())
-                        
-                        # Get summary statistics
-                        st.session_state.summary = {
-                            'total_keywords': processed_df['Keyword'].nunique() if 'Keyword' in processed_df.columns else 0,
-                            'total_domains': processed_df['domain'].nunique() if 'domain' in processed_df.columns else 0,
-                            'total_urls': processed_df['Results'].nunique() if 'Results' in processed_df.columns else 0,
-                            'date_range': get_date_range(processed_df)
-                        }
-                        
-                        st.success(f"Data loaded from Google Sheets! {len(processed_df)} rows found.")
             
             else:  # Use Sample Data
                 with st.spinner("Generating sample data..."):
