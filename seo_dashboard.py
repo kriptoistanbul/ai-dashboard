@@ -3003,167 +3003,222 @@ def compare_over_time():
         start_date_str = data.get('start_date')
         end_date_str = data.get('end_date')
         keyword = data.get('keyword')
-        
+
         # Validation
         if not all([start_date_str, end_date_str, keyword]):
             return jsonify({'error': 'Start date, end date, and keyword are required'})
-        
+
         # Load the Excel file
         df = pd.read_excel('temp_upload.xlsx')
-        
+
         # Print columns for debugging
         print("Original columns:", df.columns.tolist())
-        
+
         # Check if we have the needed columns
+        # To improve column detection, we'll check for both letter columns and named columns
         required_cols = ['Results', 'Position', 'Filled keyword', 'date/time']
-        missing_cols = [col for col in required_cols if col not in df.columns]
+        required_letter_cols = ['C', 'D', 'E', 'F']
         
-        if missing_cols:
-            print(f"Missing columns: {missing_cols}")
-            print(f"Available columns: {df.columns.tolist()}")
+        has_letter_cols = all(col in df.columns for col in required_letter_cols)
+        has_named_cols = all(col in df.columns for col in required_cols)
+        
+        # If we don't have all required columns but have letter columns, rename them
+        if not has_named_cols and has_letter_cols:
+            print("Using letter columns instead")
+            df = df.rename(columns={
+                'C': 'Results',
+                'D': 'Position',
+                'E': 'Filled keyword',
+                'F': 'date/time'
+            })
+        elif not has_named_cols and not has_letter_cols:
+            # Try to determine which columns to use based on content
+            print("Attempting to identify columns by content...")
+            for col in df.columns:
+                if pd.api.types.is_numeric_dtype(df[col]):
+                    # Likely the Position column
+                    if 'Position' not in df.columns:
+                        df = df.rename(columns={col: 'Position'})
+                        print(f"Renamed column {col} to Position")
+                elif df[col].astype(str).str.contains(r'http[s]?://').any():
+                    # Likely the Results/URL column
+                    if 'Results' not in df.columns:
+                        df = df.rename(columns={col: 'Results'})
+                        print(f"Renamed column {col} to Results")
+                elif df[col].astype(str).str.contains(keyword).any():
+                    # Likely the keyword column
+                    if 'Filled keyword' not in df.columns:
+                        df = df.rename(columns={col: 'Filled keyword'})
+                        print(f"Renamed column {col} to Filled keyword")
             
-            # Try alternative column names
-            if 'C' in df.columns and 'D' in df.columns and 'E' in df.columns and 'F' in df.columns:
-                print("Using letter columns instead")
-                df = df.rename(columns={
-                    'C': 'Results',
-                    'D': 'Position',
-                    'E': 'Filled keyword',
-                    'F': 'date/time'
-                })
-            else:
-                return jsonify({'error': f'Required columns {missing_cols} not found in data'})
-        
+            # See if we've identified the required columns
+            missing_cols = [col for col in ['Results', 'Position', 'Filled keyword'] if col not in df.columns]
+            if missing_cols:
+                return jsonify({'error': f'Could not identify required columns: {missing_cols}'})
+
         # Filter by keyword (Filled keyword column)
         print(f"Filtering by Filled keyword = '{keyword}'")
         df_keyword = df[df['Filled keyword'] == keyword]
-        
+
         if df_keyword.empty:
             return jsonify({'error': f'No data found for keyword "{keyword}"'})
-        
-        # For date matching, use the 'date/time' column
-        date_col = 'date/time'
-        
-        if date_col not in df_keyword.columns:
-            return jsonify({'error': f'Date column "{date_col}" not found. Available columns: {df_keyword.columns.tolist()}'})
-        
-        # Extract the date part from the "Mon YYYY-MM-DD H:MM:SS" format
-        df_keyword['date_str_full'] = df_keyword[date_col].astype(str)
-        df_keyword['date_part'] = df_keyword['date_str_full'].str.extract(r'(\d{4}-\d{2}-\d{2})')
-        
-        # Get unique dates for this keyword
-        unique_dates = df_keyword['date_part'].dropna().unique().tolist()
-        unique_dates.sort()
-        print(f"Unique dates for keyword '{keyword}': {unique_dates}")
-        
-        # Format input dates to match the format in our data
-        try:
-            start_dt = pd.to_datetime(start_date_str)
-            end_dt = pd.to_datetime(end_date_str)
-            start_date_formatted = start_dt.strftime('%Y-%m-%d')
-            end_date_formatted = end_dt.strftime('%Y-%m-%d')
-        except Exception as e:
-            print(f"Error parsing input dates: {e}")
-            start_date_formatted = start_date_str
-            end_date_formatted = end_date_str
-        
-        # Filter by the date part to match our input dates
-        start_data = df_keyword[df_keyword['date_part'] == start_date_formatted]
-        end_data = df_keyword[df_keyword['date_part'] == end_date_formatted]
-        
-        print(f"Found {len(start_data)} rows for start date and {len(end_data)} rows for end date")
-        
-        # If no data found, try alternative methods (contains match or fallback to available dates)
-        if start_data.empty:
-            print(f"No matches for start date '{start_date_formatted}', trying contains match")
-            start_data = df_keyword[df_keyword[date_col].astype(str).str.contains(start_date_formatted)]
-            print(f"Found {len(start_data)} rows after contains match")
+
+        # Determine which column has date information
+        date_columns = []
+        for col in ['Time', 'date/time', 'date', 'B', 'F']:
+            if col in df_keyword.columns and not df_keyword[col].isnull().all():
+                date_columns.append(col)
+
+        if not date_columns:
+            return jsonify({'error': 'No date columns found in data'})
+
+        print(f"Available date columns: {date_columns}")
+
+        # Try each date column until we find matches
+        found_start = False
+        found_end = False
+        start_data = pd.DataFrame()
+        end_data = pd.DataFrame()
+
+        for date_col in date_columns:
+            print(f"Trying date column: {date_col}")
+
+            # Extract date components based on column type
+            if pd.api.types.is_datetime64_any_dtype(df_keyword[date_col]):
+                # Already a datetime column
+                df_keyword['date_obj'] = df_keyword[date_col].dt.date
+                df_keyword['date_str'] = df_keyword[date_col].dt.strftime('%Y-%m-%d')
+            else:
+                # Convert to string and try to extract date
+                df_keyword['date_str'] = df_keyword[date_col].astype(str)
+                # Extract date parts using regex for different formats
+                df_keyword['date_part'] = df_keyword['date_str'].str.extract(r'(\d{4}-\d{2}-\d{2})')
+
+            # Format input dates for matching
+            try:
+                start_date = pd.to_datetime(start_date_str).date()
+                end_date = pd.to_datetime(end_date_str).date()
+                start_date_fmt = start_date.strftime('%Y-%m-%d')
+                end_date_fmt = end_date.strftime('%Y-%m-%d')
+            except Exception as e:
+                print(f"Error parsing dates: {e}")
+                # Use as is
+                start_date_fmt = start_date_str
+                end_date_fmt = end_date_str
+
+            # First try exact string matching
+            if 'date_part' in df_keyword.columns:
+                if not found_start:
+                    temp_start = df_keyword[df_keyword['date_part'] == start_date_fmt]
+                    if not temp_start.empty:
+                        print(f"Found {len(temp_start)} rows with exact date match for start date")
+                        start_data = temp_start
+                        found_start = True
+
+                if not found_end:
+                    temp_end = df_keyword[df_keyword['date_part'] == end_date_fmt]
+                    if not temp_end.empty:
+                        print(f"Found {len(temp_end)} rows with exact date match for end date")
+                        end_data = temp_end
+                        found_end = True
+
+            # If still no matches, try string contains
+            if not found_start:
+                temp_start = df_keyword[df_keyword['date_str'].str.contains(start_date_fmt, na=False)]
+                if not temp_start.empty:
+                    print(f"Found {len(temp_start)} rows with string contains for start date")
+                    start_data = temp_start
+                    found_start = True
+
+            if not found_end:
+                temp_end = df_keyword[df_keyword['date_str'].str.contains(end_date_fmt, na=False)]
+                if not temp_end.empty:
+                    print(f"Found {len(temp_end)} rows with string contains for end date")
+                    end_data = temp_end
+                    found_end = True
+
+            if found_start and found_end:
+                break
+
+        # If still no matches, use earliest/latest dates as fallback
+        if not found_start or not found_end:
+            if 'date_part' in df_keyword.columns:
+                date_values = df_keyword['date_part'].dropna().unique()
+                sorted_dates = sorted(date_values)
+                
+                if len(sorted_dates) >= 2:
+                    print(f"Using date fallback from {len(sorted_dates)} dates")
+                    
+                    if not found_start:
+                        temp_start = df_keyword[df_keyword['date_part'] == sorted_dates[0]]
+                        if not temp_start.empty:
+                            print(f"Using earliest date {sorted_dates[0]} with {len(temp_start)} rows")
+                            start_data = temp_start
+                            found_start = True
+                    
+                    if not found_end:
+                        temp_end = df_keyword[df_keyword['date_part'] == sorted_dates[-1]]
+                        if not temp_end.empty:
+                            print(f"Using latest date {sorted_dates[-1]} with {len(temp_end)} rows")
+                            end_data = temp_end
+                            found_end = True
+
+        # If we still have no data, split the existing data as a last resort
+        if (start_data.empty or end_data.empty) and not df_keyword.empty:
+            print("Splitting data as last resort")
+            # Sort by date if possible
+            if 'date_part' in df_keyword.columns:
+                df_keyword = df_keyword.sort_values('date_part')
             
-            if start_data.empty and unique_dates:
-                earliest_date = unique_dates[0]
-                start_data = df_keyword[df_keyword['date_part'] == earliest_date]
-                print(f"Using earliest date {earliest_date} with {len(start_data)} rows")
-        
-        if end_data.empty:
-            print(f"No matches for end date '{end_date_formatted}', trying contains match")
-            end_data = df_keyword[df_keyword[date_col].astype(str).str.contains(end_date_formatted)]
-            print(f"Found {len(end_data)} rows after contains match")
+            half_idx = len(df_keyword) // 2
             
-            if end_data.empty and len(unique_dates) > 1:
-                latest_date = unique_dates[-1]
-                end_data = df_keyword[df_keyword['date_part'] == latest_date]
-                print(f"Using latest date {latest_date} with {len(end_data)} rows")
-        
-        # ======== FIX DUPLICATES ========
+            if start_data.empty:
+                start_data = df_keyword.iloc[:half_idx]
+                print(f"Using first half of data: {len(start_data)} rows for start")
+                found_start = True
+            
+            if end_data.empty:
+                end_data = df_keyword.iloc[half_idx:]
+                print(f"Using second half of data: {len(end_data)} rows for end")
+                found_end = True
+
         # Remove duplicates by URL to fix the double position issue
-# CRITICAL FIX: Replace these lines in your compare_over_time function
+        if not start_data.empty:
+            # Drop duplicates, keeping only the first occurrence for each URL
+            start_data = start_data.drop_duplicates(subset=['Results'])
+            print(f"After removing duplicates, start data has {len(start_data)} rows")
 
-# ======== ORIGINAL PROBLEMATIC CODE ========
-# Remove duplicates by URL to fix the double position issue
-if not start_data.empty:
-    # Drop duplicates, keeping only the first occurrence for each URL
-    start_data = start_data.drop_duplicates(subset=['Results'])
-    print(f"After removing duplicates, start data has {len(start_data)} rows")
+        if not end_data.empty:
+            # Drop duplicates, keeping only the first occurrence for each URL
+            end_data = end_data.drop_duplicates(subset=['Results'])
+            print(f"After removing duplicates, end data has {len(end_data)} rows")
 
-if not end_data.empty:
-    # Drop duplicates, keeping only the first occurrence for each URL
-    end_data = end_data.drop_duplicates(subset=['Results'])
-    print(f"After removing duplicates, end data has {len(end_data)} rows")
-
-# ======== REPLACE WITH THIS FIXED CODE ========
-# Only remove duplicates if necessary, and make sure to keep the best position for each URL
-if not start_data.empty:
-    # Check if we have duplicates
-    has_duplicates = start_data.duplicated(subset=['Results']).any()
-    if has_duplicates:
-        # Sort by Position first (ascending - lower numbers = better ranking)
-        # Then drop duplicates, keeping the first occurrence (best position) for each URL
-        start_data = start_data.sort_values(by='Position', ascending=True)
-        start_data = start_data.drop_duplicates(subset=['Results'])
-        print(f"After removing duplicates, start data has {len(start_data)} rows")
-    else:
-        # No duplicates to remove
-        print(f"No duplicates found in start data ({len(start_data)} rows)")
-
-if not end_data.empty:
-    # Check if we have duplicates
-    has_duplicates = end_data.duplicated(subset=['Results']).any()
-    if has_duplicates:
-        # Sort by Position first (ascending - lower numbers = better ranking)
-        # Then drop duplicates, keeping the first occurrence (best position) for each URL
-        end_data = end_data.sort_values(by='Position', ascending=True)
-        end_data = end_data.drop_duplicates(subset=['Results'])
-        print(f"After removing duplicates, end data has {len(end_data)} rows")
-    else:
-        # No duplicates to remove
-        print(f"No duplicates found in end data ({len(end_data)} rows)")
-        
         # ======== PREPARE START DATE DATA ========
         start_urls = []
         if not start_data.empty:
             # Sort by Position (ascending - lower numbers = better ranking)
             start_data_sorted = start_data.sort_values(by='Position', ascending=True)
-            
+
             # Create URL to position mapping for end data to calculate changes
             end_positions = {}
             if not end_data.empty:
                 for idx, row in end_data.iterrows():
                     if pd.notna(row['Results']) and pd.notna(row['Position']):
                         end_positions[row['Results']] = int(row['Position']) if isinstance(row['Position'], (int, float)) else row['Position']
-            
+
             # Collect ALL URLs and positions
             for idx, row in start_data_sorted.iterrows():
                 url = row['Results']
                 position = row['Position']
-                
+
                 if pd.notna(url) and pd.notna(position):
                     try:
                         # Try to convert position to integer if possible
                         pos_value = int(position) if isinstance(position, (int, float)) else position
-                        
+
                         # Get the domain
                         domain = urlparse(url).netloc if pd.notna(url) else ''
-                        
+
                         # Calculate position change if URL exists in end data
                         position_change = None
                         position_change_text = "N/A"
@@ -3178,7 +3233,7 @@ if not end_data.empty:
                                 position_change_text = "No change"
                         else:
                             position_change_text = "Not in end data"
-                        
+
                         start_urls.append({
                             'url': url,
                             'position': pos_value,
@@ -3189,33 +3244,33 @@ if not end_data.empty:
                     except Exception as e:
                         print(f"Error processing start URL {url}: {e}")
                         continue
-        
+
         # ======== PREPARE END DATE DATA ========
         end_urls = []
         if not end_data.empty:
             # Sort by Position (ascending - lower numbers = better ranking)
             end_data_sorted = end_data.sort_values(by='Position', ascending=True)
-            
+
             # Create URL to position mapping for start data to calculate changes
             start_positions = {}
             if not start_data.empty:
                 for idx, row in start_data.iterrows():
                     if pd.notna(row['Results']) and pd.notna(row['Position']):
                         start_positions[row['Results']] = int(row['Position']) if isinstance(row['Position'], (int, float)) else row['Position']
-            
+
             # Collect ALL URLs and positions
             for idx, row in end_data_sorted.iterrows():
                 url = row['Results']
                 position = row['Position']
-                
+
                 if pd.notna(url) and pd.notna(position):
                     try:
                         # Try to convert position to integer if possible
                         pos_value = int(position) if isinstance(position, (int, float)) else position
-                        
+
                         # Get the domain
                         domain = urlparse(url).netloc if pd.notna(url) else ''
-                        
+
                         # Calculate position change if URL exists in start data
                         position_change = None
                         position_change_text = "N/A"
@@ -3230,7 +3285,7 @@ if not end_data.empty:
                                 position_change_text = "No change"
                         else:
                             position_change_text = "New"
-                        
+
                         end_urls.append({
                             'url': url,
                             'position': pos_value,
@@ -3241,73 +3296,70 @@ if not end_data.empty:
                     except Exception as e:
                         print(f"Error processing end URL {url}: {e}")
                         continue
-        
+
         # ======== PREPARE POSITION CHANGES ANALYSIS ========
         # Identify all URLs that exist in either start or end data
         all_urls = set()
-        if start_data.empty and end_data.empty:
-            position_changes = []
-        else:
-            for url_data in start_urls:
-                all_urls.add(url_data['url'])
-            
-            for url_data in end_urls:
-                all_urls.add(url_data['url'])
-            
-            # Create combined start and end mappings
-            start_pos_map = {item['url']: item['position'] for item in start_urls}
-            end_pos_map = {item['url']: item['position'] for item in end_urls}
-            
-            # Build the position changes data for ALL URLs
-            position_changes = []
-            for url in all_urls:
-                start_pos = start_pos_map.get(url, None)
-                end_pos = end_pos_map.get(url, None)
-                
-                # Only include if at least one position exists
-                if start_pos is not None or end_pos is not None:
-                    change_data = {
-                        'url': url,
-                        'start_position': start_pos,
-                        'end_position': end_pos,
-                        'domain': urlparse(url).netloc
-                    }
-                    
-                    # Calculate position change
-                    if start_pos is not None and end_pos is not None:
-                        change = end_pos - start_pos
-                        if change < 0:
-                            change_data['change_text'] = f"↑ {abs(change)} (improved)"
-                            change_data['status'] = 'improved'
-                        elif change > 0:
-                            change_data['change_text'] = f"↓ {change} (declined)"
-                            change_data['status'] = 'declined'
-                        else:
-                            change_data['change_text'] = "No change"
-                            change_data['status'] = 'unchanged'
-                        change_data['change'] = change
+        for url_data in start_urls:
+            all_urls.add(url_data['url'])
+
+        for url_data in end_urls:
+            all_urls.add(url_data['url'])
+
+        # Create combined start and end mappings
+        start_pos_map = {item['url']: item['position'] for item in start_urls}
+        end_pos_map = {item['url']: item['position'] for item in end_urls}
+
+        # Build the position changes data for ALL URLs
+        position_changes = []
+        for url in all_urls:
+            start_pos = start_pos_map.get(url, None)
+            end_pos = end_pos_map.get(url, None)
+
+            # Only include if at least one position exists
+            if start_pos is not None or end_pos is not None:
+                change_data = {
+                    'url': url,
+                    'start_position': start_pos,
+                    'end_position': end_pos,
+                    'domain': urlparse(url).netloc
+                }
+
+                # Calculate position change
+                if start_pos is not None and end_pos is not None:
+                    change = end_pos - start_pos
+                    if change < 0:
+                        change_data['change_text'] = f"↑ {abs(change)} (improved)"
+                        change_data['status'] = 'improved'
+                    elif change > 0:
+                        change_data['change_text'] = f"↓ {change} (declined)"
+                        change_data['status'] = 'declined'
                     else:
-                        change_data['change'] = None
-                        if start_pos is None:
-                            change_data['change_text'] = "New"
-                            change_data['status'] = 'new'
-                        else:
-                            change_data['change_text'] = "Dropped"
-                            change_data['status'] = 'dropped'
-                    
-                    position_changes.append(change_data)
-            
-            # Sort by absolute change (biggest changes first)
-            position_changes = sorted(position_changes, 
-                key=lambda x: (
-                    # Sort order: first by status (changed, then new/dropped, then unchanged)
-                    0 if x['status'] in ('improved', 'declined') else (1 if x['status'] in ('new', 'dropped') else 2),
-                    # Then by absolute change value (descending)
-                    abs(x['change']) if x['change'] is not None else 0
-                ), 
-                reverse=True
-            )
-        
+                        change_data['change_text'] = "No change"
+                        change_data['status'] = 'unchanged'
+                    change_data['change'] = change
+                else:
+                    change_data['change'] = None
+                    if start_pos is None:
+                        change_data['change_text'] = "New"
+                        change_data['status'] = 'new'
+                    else:
+                        change_data['change_text'] = "Dropped"
+                        change_data['status'] = 'dropped'
+
+                position_changes.append(change_data)
+
+        # Sort by absolute change (biggest changes first)
+        position_changes = sorted(position_changes, 
+            key=lambda x: (
+                # Sort order: first by status (changed, then new/dropped, then unchanged)
+                0 if x['status'] in ('improved', 'declined') else (1 if x['status'] in ('new', 'dropped') else 2),
+                # Then by absolute change value (descending)
+                abs(x['change']) if x['change'] is not None else 0
+            ), 
+            reverse=True
+        )
+
         # Return all the prepared data
         return jsonify({
             'success': True,
@@ -3319,997 +3371,14 @@ if not end_data.empty:
             'position_changes': position_changes,
             'start_count': len(start_urls),
             'end_count': len(end_urls),
-            'available_dates': unique_dates
+            'available_dates': df_keyword['date_part'].dropna().unique().tolist() if 'date_part' in df_keyword.columns else []
         })
-        
-    except Exception as e:
-        import traceback
-        traceback_str = traceback.format_exc()
-        print(traceback_str)
-        return jsonify({'error': str(e), 'traceback': traceback_str})
-    try:
-        data = request.json
-        start_date_str = data.get('start_date')
-        end_date_str = data.get('end_date')
-        keyword = data.get('keyword')
-        
-        # Validation
-        if not all([start_date_str, end_date_str, keyword]):
-            return jsonify({'error': 'Start date, end date, and keyword are required'})
-        
-        # Load the Excel file
-        df = pd.read_excel('temp_upload.xlsx')
-        
-        # Print columns for debugging
-        print("Original columns:", df.columns.tolist())
-        
-        # Check if we have the needed columns
-        required_cols = ['Results', 'Position', 'Filled keyword', 'date/time']
-        missing_cols = [col for col in required_cols if col not in df.columns]
-        
-        if missing_cols:
-            print(f"Missing columns: {missing_cols}")
-            print(f"Available columns: {df.columns.tolist()}")
-            
-            # Try alternative column names
-            if 'C' in df.columns and 'D' in df.columns and 'E' in df.columns and 'F' in df.columns:
-                print("Using letter columns instead")
-                df = df.rename(columns={
-                    'C': 'Results',
-                    'D': 'Position',
-                    'E': 'Filled keyword',
-                    'F': 'date/time'
-                })
-            else:
-                return jsonify({'error': f'Required columns {missing_cols} not found in data'})
-        
-        # Filter by keyword (Filled keyword column)
-        print(f"Filtering by Filled keyword = '{keyword}'")
-        df_keyword = df[df['Filled keyword'] == keyword]
-        
-        if df_keyword.empty:
-            return jsonify({'error': f'No data found for keyword "{keyword}"'})
-        
-        # For date matching, use the 'date/time' column
-        date_col = 'date/time'
-        
-        if date_col not in df_keyword.columns:
-            return jsonify({'error': f'Date column "{date_col}" not found. Available columns: {df_keyword.columns.tolist()}'})
-        
-        # Show some sample date values for debugging
-        sample_dates = df_keyword[date_col].head(5).tolist()
-        print(f"Sample date values: {sample_dates}")
-        
-        # Extract the date part from the "Mon YYYY-MM-DD H:MM:SS" format
-        # First convert to string to ensure we can do string operations
-        df_keyword['date_str_full'] = df_keyword[date_col].astype(str)
-        
-        # Extract just the date part using regex or string splitting
-        df_keyword['date_part'] = df_keyword['date_str_full'].str.extract(r'(\d{4}-\d{2}-\d{2})')
-        
-        # Show the extracted date parts
-        print("Extracted date parts:", df_keyword['date_part'].head(5).tolist())
-        
-        # Get unique dates for this keyword
-        unique_dates = df_keyword['date_part'].dropna().unique().tolist()
-        print(f"Unique dates for keyword '{keyword}': {unique_dates}")
-        
-        # Format input dates to match the format in our data
-        # First parse the input dates
-        try:
-            start_dt = pd.to_datetime(start_date_str)
-            end_dt = pd.to_datetime(end_date_str)
-            
-            # Format to match YYYY-MM-DD format in our data
-            start_date_formatted = start_dt.strftime('%Y-%m-%d')
-            end_date_formatted = end_dt.strftime('%Y-%m-%d')
-            
-            print(f"Formatted input dates: {start_date_formatted} and {end_date_formatted}")
-        except Exception as e:
-            print(f"Error parsing input dates: {e}")
-            # Use as-is if parsing fails
-            start_date_formatted = start_date_str
-            end_date_formatted = end_date_str
-        
-        # Filter by the date part to match our input dates
-        start_data = df_keyword[df_keyword['date_part'] == start_date_formatted]
-        end_data = df_keyword[df_keyword['date_part'] == end_date_formatted]
-        
-        print(f"Found {len(start_data)} rows for start date and {len(end_data)} rows for end date")
-        
-        # If no data found, try alternative methods
-        if start_data.empty:
-            print(f"No matches for start date '{start_date_formatted}', trying contains match")
-            start_data = df_keyword[df_keyword[date_col].astype(str).str.contains(start_date_formatted)]
-            print(f"Found {len(start_data)} rows after contains match")
-        
-        if end_data.empty:
-            print(f"No matches for end date '{end_date_formatted}', trying contains match")
-            end_data = df_keyword[df_keyword[date_col].astype(str).str.contains(end_date_formatted)]
-            print(f"Found {len(end_data)} rows after contains match")
-        
-        # If still empty and we have data overall, just use some of the data
-        if (start_data.empty or end_data.empty) and not df_keyword.empty:
-            print("Not enough date matches, using available data as fallback")
-            
-            # Get unique dates and use the earliest and latest
-            if len(unique_dates) >= 2:
-                unique_dates.sort()
-                
-                if start_data.empty:
-                    earliest_date = unique_dates[0]
-                    start_data = df_keyword[df_keyword['date_part'] == earliest_date]
-                    print(f"Using earliest date {earliest_date} with {len(start_data)} rows")
-                
-                if end_data.empty:
-                    latest_date = unique_dates[-1]
-                    end_data = df_keyword[df_keyword['date_part'] == latest_date]
-                    print(f"Using latest date {latest_date} with {len(end_data)} rows")
-            else:
-                # If only one date, split the data in half
-                print("Only one date available, splitting the data")
-                all_data = df_keyword.copy()
-                half_idx = len(all_data) // 2
-                
-                if start_data.empty:
-                    start_data = all_data.iloc[:half_idx]
-                
-                if end_data.empty:
-                    end_data = all_data.iloc[half_idx:]
-        
-        # ======== PREPARE START DATE DATA ========
-        start_urls = []
-        if not start_data.empty:
-            # Sort by Position (ascending - lower numbers = better ranking)
-            start_data_sorted = start_data.sort_values(by='Position', ascending=True)
-            
-            # Collect ALL URLs and positions
-            for idx, row in start_data_sorted.iterrows():
-                url = row['Results']
-                position = row['Position']
-                
-                if pd.notna(url) and pd.notna(position):
-                    try:
-                        # Try to convert position to integer if possible
-                        pos_value = int(position) if isinstance(position, (int, float)) else position
-                        
-                        # Get the domain
-                        domain = urlparse(url).netloc if pd.notna(url) else ''
-                        
-                        start_urls.append({
-                            'url': url,
-                            'position': pos_value,
-                            'domain': domain
-                        })
-                    except:
-                        # Skip entries that can't be processed
-                        continue
-        
-        # ======== PREPARE END DATE DATA ========
-        end_urls = []
-        if not end_data.empty:
-            # Sort by Position (ascending - lower numbers = better ranking)
-            end_data_sorted = end_data.sort_values(by='Position', ascending=True)
-            
-            # Collect ALL URLs and positions
-            for idx, row in end_data_sorted.iterrows():
-                url = row['Results']
-                position = row['Position']
-                
-                if pd.notna(url) and pd.notna(position):
-                    try:
-                        # Try to convert position to integer if possible
-                        pos_value = int(position) if isinstance(position, (int, float)) else position
-                        
-                        # Get the domain
-                        domain = urlparse(url).netloc if pd.notna(url) else ''
-                        
-                        end_urls.append({
-                            'url': url,
-                            'position': pos_value,
-                            'domain': domain
-                        })
-                    except:
-                        # Skip entries that can't be processed
-                        continue
-        
-        # Return separate lists for both dates
-        return jsonify({
-            'success': True,
-            'keyword': keyword,
-            'start_date': start_date_str,
-            'end_date': end_date_str,
-            'start_urls': start_urls,
-            'end_urls': end_urls,
-            'start_count': len(start_urls),
-            'end_count': len(end_urls),
-            'available_dates': unique_dates
-        })
-        
-    except Exception as e:
-        import traceback
-        traceback_str = traceback.format_exc()
-        print(traceback_str)
-        return jsonify({'error': str(e), 'traceback': traceback_str})
-    try:
-        data = request.json
-        start_date_str = data.get('start_date')
-        end_date_str = data.get('end_date')
-        keyword = data.get('keyword')
-        
-        # Validation
-        if not all([start_date_str, end_date_str, keyword]):
-            return jsonify({'error': 'Start date, end date, and keyword are required'})
-        
-        # Load the Excel file
-        df = pd.read_excel('temp_upload.xlsx')
-        
-        # Print columns for debugging
-        print("Original columns:", df.columns.tolist())
-        
-        # Check if we have the needed columns
-        required_cols = ['Results', 'Position', 'Filled keyword']
-        missing_cols = [col for col in required_cols if col not in df.columns]
-        
-        if missing_cols:
-            print(f"Missing columns: {missing_cols}")
-            print(f"Available columns: {df.columns.tolist()}")
-            
-            # Check if we have alternative columns 
-            if 'C' in df.columns and 'D' in df.columns and 'E' in df.columns:
-                print("Found letter columns instead, using those")
-                df = df.rename(columns={
-                    'C': 'Results',
-                    'D': 'Position',
-                    'E': 'Filled keyword'
-                })
-            else:
-                return jsonify({'error': f'Required columns {missing_cols} not found in data. Available columns: {df.columns.tolist()}'})
-        
-        # Filter by keyword (Filled keyword column)
-        print(f"Filtering by Filled keyword = '{keyword}'")
-        df_keyword = df[df['Filled keyword'] == keyword]
-        
-        if df_keyword.empty:
-            return jsonify({'error': f'No data found for keyword "{keyword}"'})
-        
-        # For date matching, we'll use the 'Time' column or 'B' if available
-        date_col = 'Time' if 'Time' in df.columns else ('B' if 'B' in df.columns else None)
-        
-        if not date_col:
-            print(f"No date column found. Available columns: {df.columns.tolist()}")
-            return jsonify({'error': 'No date column found'})
-        
-        print(f"Using {date_col} as date column")
-        
-        # Convert to datetime for matching
-        df_keyword['datetime'] = pd.to_datetime(df_keyword[date_col], errors='coerce')
-        df_keyword['date_str'] = df_keyword['datetime'].dt.strftime('%Y-%m-%d')
-        
-        # Print unique dates for debugging
-        unique_dates = df_keyword['date_str'].dropna().unique().tolist()
-        print(f"Available dates ({len(unique_dates)}): {unique_dates}")
-        
-        # Filter by dates
-        start_data = df_keyword[df_keyword['date_str'] == start_date_str]
-        end_data = df_keyword[df_keyword['date_str'] == end_date_str]
-        
-        print(f"Found {len(start_data)} rows for start date and {len(end_data)} rows for end date")
-        
-        # If we didn't find exact matches, try to find dates containing the string
-        if start_data.empty:
-            print(f"No exact matches for start date, trying contains match for {start_date_str}")
-            start_data = df_keyword[df_keyword[date_col].astype(str).str.contains(start_date_str)]
-            print(f"Found {len(start_data)} rows after contains match")
-        
-        if end_data.empty:
-            print(f"No exact matches for end date, trying contains match for {end_date_str}")
-            end_data = df_keyword[df_keyword[date_col].astype(str).str.contains(end_date_str)]
-            print(f"Found {len(end_data)} rows after contains match")
-        
-        # If still empty, try a more lenient date matching approach
-        if start_data.empty or end_data.empty:
-            # Try matching just the day value
-            try:
-                start_day = pd.to_datetime(start_date_str).day
-                end_day = pd.to_datetime(end_date_str).day
-                
-                print(f"Trying day matching: start_day={start_day}, end_day={end_day}")
-                
-                if start_data.empty:
-                    start_data = df_keyword[df_keyword['datetime'].dt.day == start_day]
-                    print(f"Found {len(start_data)} rows after day matching for start date")
-                
-                if end_data.empty:
-                    end_data = df_keyword[df_keyword['datetime'].dt.day == end_day]
-                    print(f"Found {len(end_data)} rows after day matching for end date")
-            except Exception as e:
-                print(f"Error in day matching: {e}")
-        
-        # Last resort: just split the data if still empty
-        if start_data.empty and end_data.empty and not df_keyword.empty:
-            print("Using all data and splitting it as last resort")
-            df_keyword_sorted = df_keyword.sort_values(by='datetime')
-            
-            # Split into first half and second half
-            half_index = len(df_keyword_sorted) // 2
-            start_data = df_keyword_sorted.iloc[:half_index]
-            end_data = df_keyword_sorted.iloc[half_index:]
-            
-            print(f"Split data into {len(start_data)} start rows and {len(end_data)} end rows")
-        
-        # ======== PREPARE START DATE DATA ========
-        start_urls = []
-        if not start_data.empty:
-            # Sort by Position (ascending - lower numbers = better ranking)
-            start_data_sorted = start_data.sort_values(by='Position', ascending=True)
-            
-            # Collect ALL URLs and positions
-            for idx, row in start_data_sorted.iterrows():
-                url = row['Results']
-                position = row['Position']
-                
-                if pd.notna(url) and pd.notna(position):
-                    domain = get_domain(url) if callable(get_domain) else urlparse(url).netloc
-                    
-                    start_urls.append({
-                        'url': url,
-                        'position': int(position) if isinstance(position, (int, float)) else position,
-                        'domain': domain or ''
-                    })
-        
-        # ======== PREPARE END DATE DATA ========
-        end_urls = []
-        if not end_data.empty:
-            # Sort by Position (ascending - lower numbers = better ranking)
-            end_data_sorted = end_data.sort_values(by='Position', ascending=True)
-            
-            # Collect ALL URLs and positions
-            for idx, row in end_data_sorted.iterrows():
-                url = row['Results']
-                position = row['Position']
-                
-                if pd.notna(url) and pd.notna(position):
-                    domain = get_domain(url) if callable(get_domain) else urlparse(url).netloc
-                    
-                    end_urls.append({
-                        'url': url,
-                        'position': int(position) if isinstance(position, (int, float)) else position,
-                        'domain': domain or ''
-                    })
-        
-        # Return separate lists for both dates
-        return jsonify({
-            'success': True,
-            'keyword': keyword,
-            'start_date': start_date_str,
-            'end_date': end_date_str,
-            'start_urls': start_urls,
-            'end_urls': end_urls,
-            'start_count': len(start_urls),
-            'end_count': len(end_urls)
-        })
-        
-    except Exception as e:
-        import traceback
-        traceback_str = traceback.format_exc()
-        print(traceback_str)
-        return jsonify({'error': str(e), 'traceback': traceback_str})
-    try:
-        data = request.json
-        start_date_str = data.get('start_date')
-        end_date_str = data.get('end_date')
-        keyword = data.get('keyword')
-        
-        # Validation
-        if not all([start_date_str, end_date_str, keyword]):
-            return jsonify({'error': 'Start date, end date, and keyword are required'})
-        
-        # Load the Excel file
-        df = pd.read_excel('temp_upload.xlsx')
-        
-        # Print columns for debugging
-        print("Original columns:", df.columns.tolist())
-        
-        # Just work directly with letter columns to simplify
-        # A = Keyword, B = Time, C = Results (URLs), D = Position, E = Filled keyword
-        # Make sure we have the needed columns
-        required_cols = ['C', 'D', 'E']
-        for col in required_cols:
-            if col not in df.columns:
-                return jsonify({'error': f'Required column {col} not found in data'})
-        
-        # Filter by keyword (column E)
-        print(f"Filtering by E = '{keyword}'")
-        df_keyword = df[df['E'] == keyword]
-        
-        if df_keyword.empty:
-            return jsonify({'error': f'No data found for keyword "{keyword}"'})
-        
-        # For date matching, we'll use the B column (Time)
-        date_col = 'B'
-        
-        # Convert to datetime for matching
-        df_keyword['datetime'] = pd.to_datetime(df_keyword[date_col], errors='coerce')
-        df_keyword['date_str'] = df_keyword['datetime'].dt.strftime('%Y-%m-%d')
-        
-        # Print unique dates for debugging
-        print("Available dates:", df_keyword['date_str'].unique().tolist())
-        
-        # Filter by dates
-        start_data = df_keyword[df_keyword['date_str'] == start_date_str]
-        end_data = df_keyword[df_keyword['date_str'] == end_date_str]
-        
-        print(f"Found {len(start_data)} rows for start date and {len(end_data)} rows for end date")
-        
-        # If we didn't find exact matches, try to find dates containing the string
-        if start_data.empty:
-            print(f"No exact matches for start date, trying contains match for {start_date_str}")
-            start_data = df_keyword[df_keyword[date_col].astype(str).str.contains(start_date_str)]
-            print(f"Found {len(start_data)} rows after contains match")
-        
-        if end_data.empty:
-            print(f"No exact matches for end date, trying contains match for {end_date_str}")
-            end_data = df_keyword[df_keyword[date_col].astype(str).str.contains(end_date_str)]
-            print(f"Found {len(end_data)} rows after contains match")
-        
-        # If still empty, take two different days as fallback
-        if start_data.empty or end_data.empty:
-            unique_days = df_keyword['datetime'].dt.day.unique()
-            if len(unique_days) >= 2:
-                print("Using different days as fallback")
-                earliest_day = min(unique_days)
-                latest_day = max(unique_days)
-                
-                start_data = df_keyword[df_keyword['datetime'].dt.day == earliest_day]
-                end_data = df_keyword[df_keyword['datetime'].dt.day == latest_day]
-        
-        # ======== PREPARE START DATE DATA ========
-        start_urls = []
-        if not start_data.empty:
-            # Sort by Position (column D) - ascending (lower numbers = better ranking)
-            start_data = start_data.sort_values(by='D', ascending=True)
-            
-            # Simple collect ALL URLs from column C and positions from column D
-            for idx, row in start_data.iterrows():
-                start_urls.append({
-                    'url': row['C'],
-                    'position': int(row['D']) if pd.notna(row['D']) else None,
-                    'domain': urlparse(row['C']).netloc if pd.notna(row['C']) else ''
-                })
-        
-        # ======== PREPARE END DATE DATA ========
-        end_urls = []
-        if not end_data.empty:
-            # Sort by Position (column D) - ascending (lower numbers = better ranking)
-            end_data = end_data.sort_values(by='D', ascending=True)
-            
-            # Simple collect ALL URLs from column C and positions from column D
-            for idx, row in end_data.iterrows():
-                end_urls.append({
-                    'url': row['C'],
-                    'position': int(row['D']) if pd.notna(row['D']) else None,
-                    'domain': urlparse(row['C']).netloc if pd.notna(row['C']) else ''
-                })
-        
-        # Return separate lists for both dates
-        return jsonify({
-            'success': True,
-            'keyword': keyword,
-            'start_date': start_date_str,
-            'end_date': end_date_str,
-            'start_urls': start_urls,
-            'end_urls': end_urls,
-            'start_count': len(start_urls),
-            'end_count': len(end_urls)
-        })
-        
-    except Exception as e:
-        import traceback
-        traceback_str = traceback.format_exc()
-        print(traceback_str)
-        return jsonify({'error': str(e), 'traceback': traceback_str})
-    try:
-        data = request.json
-        start_date_str = data.get('start_date')
-        end_date_str = data.get('end_date')
-        keyword = data.get('keyword')
-        
-        # Validation
-        if not all([start_date_str, end_date_str, keyword]):
-            return jsonify({'error': 'Start date, end date, and keyword are required'})
-        
-        # Load the Excel file
-        original_df = pd.read_excel('temp_upload.xlsx')
-        
-        # Print column names for debugging
-        print("Original columns:", original_df.columns.tolist())
-        
-        # Detect data structure based on column names
-        df = original_df.copy()
-        
-        # If we have standard column names, rename them to our expected format
-        if 'Keyword' in df.columns and 'Time' in df.columns and 'Results' in df.columns and 'Position' in df.columns:
-            # Standard format
-            pass
-        elif 'A' in df.columns and 'B' in df.columns and 'C' in df.columns and 'D' in df.columns and 'E' in df.columns:
-            # Excel-style column names (A, B, C, D, E, etc.)
-            col_map = {
-                'A': 'Keyword',
-                'B': 'Time',
-                'C': 'Results',
-                'D': 'Position',
-                'E': 'Filled keyword',
-                'F': 'date/time'
-            }
-            df = df.rename(columns=col_map)
-        
-        # Check if we have necessary columns
-        if 'Results' not in df.columns or 'Position' not in df.columns:
-            print("Required columns not found. Available columns:", df.columns.tolist())
-            return jsonify({'error': 'Required columns not found in data'})
-        
-        # Determine which column to use for keyword filtering
-        # First try 'Filled keyword', then 'Keyword'
-        keyword_column = 'Filled keyword' if 'Filled keyword' in df.columns else 'Keyword'
-        
-        if keyword_column not in df.columns:
-            return jsonify({'error': f'Keyword column not found in data. Available columns: {df.columns.tolist()}'})
-        
-        # Filter by keyword
-        print(f"Filtering by {keyword_column} = '{keyword}'")
-        keyword_df = df[df[keyword_column] == keyword]
-        
-        print(f"Found {len(keyword_df)} rows for keyword '{keyword}'")
-        if keyword_df.empty:
-            return jsonify({'error': f'No data for keyword "{keyword}" in column {keyword_column}'})
-        
-        # Determine which column has date information
-        date_columns = []
-        for col in ['Time', 'date/time', 'date']:
-            if col in keyword_df.columns:
-                date_columns.append(col)
-        
-        if not date_columns:
-            return jsonify({'error': 'No date columns found in data'})
-        
-        print(f"Available date columns: {date_columns}")
-        
-        # Try each date column until we find matches
-        found_start = False
-        found_end = False
-        start_data = pd.DataFrame()
-        end_data = pd.DataFrame()
-        
-        for date_col in date_columns:
-            print(f"Trying date column: {date_col}")
-            
-            # Print unique date values for debugging
-            unique_dates = keyword_df[date_col].unique()
-            print(f"Unique {date_col} values ({len(unique_dates)}): {unique_dates[:10]}")
-            
-            # Convert dates to strings for comparison to handle different formats
-            keyword_df['date_str'] = keyword_df[date_col].astype(str)
-            
-            # Show some sample date strings
-            print(f"Sample date strings: {keyword_df['date_str'].iloc[:5].tolist()}")
-            
-            # Try multiple date formats for start_date
-            start_date_formats = [
-                start_date_str,
-                pd.to_datetime(start_date_str).strftime('%Y-%m-%d'),
-                pd.to_datetime(start_date_str).strftime('%m/%d/%Y'),
-                pd.to_datetime(start_date_str).strftime('%Y/%m/%d')
-            ]
-            
-            end_date_formats = [
-                end_date_str,
-                pd.to_datetime(end_date_str).strftime('%Y-%m-%d'),
-                pd.to_datetime(end_date_str).strftime('%m/%d/%Y'),
-                pd.to_datetime(end_date_str).strftime('%Y/%m/%d')
-            ]
-            
-            # Try multiple ways to match the date
-            # Method 1: Direct string contains matching
-            for start_format in start_date_formats:
-                temp_start = keyword_df[keyword_df['date_str'].str.contains(start_format, na=False)]
-                if not temp_start.empty:
-                    print(f"Found {len(temp_start)} rows with date {start_format}")
-                    start_data = temp_start
-                    found_start = True
-                    break
-            
-            for end_format in end_date_formats:
-                temp_end = keyword_df[keyword_df['date_str'].str.contains(end_format, na=False)]
-                if not temp_end.empty:
-                    print(f"Found {len(temp_end)} rows with date {end_format}")
-                    end_data = temp_end
-                    found_end = True
-                    break
-            
-            if found_start and found_end:
-                break
-            
-            # Method 2: Convert to datetime and compare
-            if not (found_start and found_end):
-                try:
-                    keyword_df['date_dt'] = pd.to_datetime(keyword_df[date_col], errors='coerce')
-                    keyword_df['date_only'] = keyword_df['date_dt'].dt.date
-                    
-                    start_date_dt = pd.to_datetime(start_date_str).date()
-                    end_date_dt = pd.to_datetime(end_date_str).date()
-                    
-                    # Show some converted dates
-                    print(f"Converted dates sample: {keyword_df['date_only'].iloc[:5].tolist()}")
-                    print(f"Looking for dates: {start_date_dt} and {end_date_dt}")
-                    
-                    if not found_start:
-                        temp_start = keyword_df[keyword_df['date_only'] == start_date_dt]
-                        if not temp_start.empty:
-                            print(f"Found {len(temp_start)} rows matching start date")
-                            start_data = temp_start
-                            found_start = True
-                    
-                    if not found_end:
-                        temp_end = keyword_df[keyword_df['date_only'] == end_date_dt]
-                        if not temp_end.empty:
-                            print(f"Found {len(temp_end)} rows matching end date")
-                            end_data = temp_end
-                            found_end = True
-                except Exception as e:
-                    print(f"Error in datetime conversion: {e}")
-            
-            if found_start and found_end:
-                break
-        
-        # If still no matches, try more lenient matching
-        if not (found_start and found_end):
-            # Try partial date matching (just the day)
-            start_day = pd.to_datetime(start_date_str).day
-            end_day = pd.to_datetime(end_date_str).day
-            
-            print(f"Trying to match just the day: start={start_day}, end={end_day}")
-            
-            for date_col in date_columns:
-                try:
-                    keyword_df['date_dt'] = pd.to_datetime(keyword_df[date_col], errors='coerce')
-                    
-                    if not found_start:
-                        temp_start = keyword_df[keyword_df['date_dt'].dt.day == start_day]
-                        if not temp_start.empty:
-                            print(f"Found {len(temp_start)} rows matching start day {start_day}")
-                            start_data = temp_start
-                            found_start = True
-                    
-                    if not found_end:
-                        temp_end = keyword_df[keyword_df['date_dt'].dt.day == end_day]
-                        if not temp_end.empty:
-                            print(f"Found {len(temp_end)} rows matching end day {end_day}")
-                            end_data = temp_end
-                            found_end = True
-                except Exception as e:
-                    print(f"Error in day matching: {e}")
-                
-                if found_start and found_end:
-                    break
-        
-        # Last resort: Return the first and last dates in the dataset
-        if not (found_start or found_end):
-            print("No matches found - using first/last dates in dataset as fallback")
-            try:
-                for date_col in date_columns:
-                    keyword_df['date_dt'] = pd.to_datetime(keyword_df[date_col], errors='coerce')
-                    keyword_df = keyword_df.sort_values('date_dt')
-                    
-                    # Take earliest date for start and latest for end
-                    if not found_start:
-                        start_data = keyword_df.head(len(keyword_df) // 2)  # First half
-                        found_start = True
-                    
-                    if not found_end:
-                        end_data = keyword_df.tail(len(keyword_df) // 2)  # Second half
-                        found_end = True
-                    
-                    if found_start and found_end:
-                        break
-            except Exception as e:
-                print(f"Error in fallback date handling: {e}")
-        
-        # Debug: Check number of rows found
-        print(f"Final start date data rows: {len(start_data)}")
-        print(f"Final end date data rows: {len(end_data)}")
-        
-        if start_data.empty and end_data.empty:
-            # As a last resort, just use all the data split into two parts
-            print("Both dates still empty - splitting all data")
-            start_data = keyword_df.iloc[:len(keyword_df)//2]
-            end_data = keyword_df.iloc[len(keyword_df)//2:]
-        
-        # ======== PREPARE START DATE DATA ========
-        start_urls = []
-        if not start_data.empty:
-            # Sort by Position (ascending)
-            start_data_sorted = start_data.sort_values(by='Position', ascending=True)
-            
-            # Get all URLs and positions
-            for idx, row in start_data_sorted.iterrows():
-                start_urls.append({
-                    'url': row['Results'],
-                    'position': int(row['Position']) if isinstance(row['Position'], (int, float)) else None,
-                    'domain': row.get('domain', '')
-                })
-        
-        # ======== PREPARE END DATE DATA ========
-        end_urls = []
-        if not end_data.empty:
-            # Sort by Position (ascending)
-            end_data_sorted = end_data.sort_values(by='Position', ascending=True)
-            
-            # Get all URLs and positions
-            for idx, row in end_data_sorted.iterrows():
-                end_urls.append({
-                    'url': row['Results'],
-                    'position': int(row['Position']) if isinstance(row['Position'], (int, float)) else None,
-                    'domain': row.get('domain', '')
-                })
-        
-        # Return separate lists for both dates
-        return jsonify({
-            'success': True,
-            'keyword': keyword,
-            'start_date': start_date_str,
-            'end_date': end_date_str,
-            'start_urls': start_urls,
-            'end_urls': end_urls,
-            'start_count': len(start_urls),
-            'end_count': len(end_urls)
-        })
-        
-    except Exception as e:
-        import traceback
-        traceback_str = traceback.format_exc()
-        print(traceback_str)
-        return jsonify({'error': str(e), 'traceback': traceback_str})
-    try:
-        data = request.json
-        start_date_str = data.get('start_date')
-        end_date_str = data.get('end_date')
-        keyword = data.get('keyword')
-        
-        # Validation
-        if not all([start_date_str, end_date_str, keyword]):
-            return jsonify({'error': 'Start date, end date, and keyword are required'})
-        
-        # Load the Excel file
-        original_df = pd.read_excel('temp_upload.xlsx')
-        
-        # Print column names for debugging
-        print("Original columns:", original_df.columns.tolist())
-        
-        # Detect data structure based on column names
-        df = original_df.copy()
-        
-        # If we have standard column names, rename them to our expected format
-        if 'Keyword' in df.columns and 'Time' in df.columns and 'Results' in df.columns and 'Position' in df.columns:
-            # Standard format
-            pass
-        elif 'A' in df.columns and 'B' in df.columns and 'C' in df.columns and 'D' in df.columns and 'E' in df.columns:
-            # Excel-style column names (A, B, C, D, E, etc.)
-            col_map = {
-                'A': 'Keyword',
-                'B': 'Time',
-                'C': 'Results',
-                'D': 'Position',
-                'E': 'Filled keyword'
-            }
-            df = df.rename(columns=col_map)
-        
-        # Check if we have necessary columns
-        if 'Results' not in df.columns or 'Position' not in df.columns:
-            print("Required columns not found. Available columns:", df.columns.tolist())
-            return jsonify({'error': 'Required columns not found in data'})
-        
-        # Process the data (convert dates, etc.)
-        df = prepare_data(df)
-        
-        # Determine which column to use for keyword filtering
-        # First try 'Filled keyword', then 'Keyword'
-        keyword_column = 'Filled keyword' if 'Filled keyword' in df.columns else 'Keyword'
-        
-        if keyword_column not in df.columns:
-            return jsonify({'error': f'Keyword column not found in data. Available columns: {df.columns.tolist()}'})
-        
-        # Filter by keyword
-        print(f"Filtering by {keyword_column} = '{keyword}'")
-        keyword_df = df[df[keyword_column] == keyword]
-        
-        print(f"Found {len(keyword_df)} rows for keyword '{keyword}'")
-        if keyword_df.empty:
-            return jsonify({'error': f'No data for keyword "{keyword}" in column {keyword_column}'})
-        
-        # Convert date fields to datetime
-        date_column = None
-        for col in ['date', 'Time', 'date/time']:
-            if col in keyword_df.columns and not keyword_df[col].isnull().all():
-                date_column = col
-                break
-                
-        if not date_column:
-            return jsonify({'error': 'No valid date column found'})
-            
-        print(f"Using date column: {date_column}")
-        
-        # Convert the selected date strings to datetime objects
-        try:
-            start_date = pd.to_datetime(start_date_str).date()
-            end_date = pd.to_datetime(end_date_str).date()
-        except Exception as e:
-            print(f"Error parsing dates: {e}")
-            return jsonify({'error': f'Error parsing dates: {e}'})
-        
-        print(f"Looking for date matches: {start_date} and {end_date}")
-        
-        # Filter for dates that match our start and end dates
-        if date_column == 'date':
-            # Already a date object
-            start_data = keyword_df[keyword_df['date'] == start_date].copy()
-            end_data = keyword_df[keyword_df['date'] == end_date].copy()
-        else:
-            # Need to convert to date objects for comparison
-            start_data = keyword_df[pd.to_datetime(keyword_df[date_column]).dt.date == start_date].copy()
-            end_data = keyword_df[pd.to_datetime(keyword_df[date_column]).dt.date == end_date].copy()
-        
-        # Debug: Check number of rows for each filtered date
-        print(f"Rows for start date {start_date}: {len(start_data)}")
-        print(f"Rows for end date {end_date}: {len(end_data)}")
-        
-        if start_data.empty and end_data.empty:
-            return jsonify({'error': f'No data for dates: {start_date_str} / {end_date_str}'})
-        
-        # ======== PREPARE START DATE DATA ========
-        start_urls = []
-        if not start_data.empty:
-            # Sort by Position (ascending)
-            start_data_sorted = start_data.sort_values(by='Position', ascending=True)
-            
-            # Get all URLs and positions
-            for idx, row in start_data_sorted.iterrows():
-                start_urls.append({
-                    'url': row['Results'],
-                    'position': int(row['Position']) if isinstance(row['Position'], (int, float)) else None,
-                    'domain': row.get('domain', '')
-                })
-        
-        # ======== PREPARE END DATE DATA ========
-        end_urls = []
-        if not end_data.empty:
-            # Sort by Position (ascending)
-            end_data_sorted = end_data.sort_values(by='Position', ascending=True)
-            
-            # Get all URLs and positions
-            for idx, row in end_data_sorted.iterrows():
-                end_urls.append({
-                    'url': row['Results'],
-                    'position': int(row['Position']) if isinstance(row['Position'], (int, float)) else None,
-                    'domain': row.get('domain', '')
-                })
-        
-        # Return separate lists for both dates
-        return jsonify({
-            'success': True,
-            'keyword': keyword,
-            'start_date': start_date_str,
-            'end_date': end_date_str,
-            'start_urls': start_urls,
-            'end_urls': end_urls,
-            'start_count': len(start_urls),
-            'end_count': len(end_urls)
-        })
-        
-    except Exception as e:
-        import traceback
-        traceback_str = traceback.format_exc()
-        print(traceback_str)
-        return jsonify({'error': str(e), 'traceback': traceback_str})
-    try:
-        data = request.json
-        start_date_str = data.get('start_date')
-        end_date_str = data.get('end_date')
-        keyword = data.get('keyword')
-        
-        # Validation
-        if not all([start_date_str, end_date_str, keyword]):
-            return jsonify({'error': 'Start date, end date, and keyword are required'})
-        
-        # Load the Excel file
-        df = pd.read_excel('temp_upload.xlsx')
-        
-        # Rename columns if needed
-        col_map = {
-            'C': 'Results',
-            'D': 'Position',
-            'E': 'Keyword',
-            'F': 'Time'
-        }
-        for old_col, new_col in col_map.items():
-            if old_col in df.columns:
-                df = df.rename(columns={old_col: new_col})
-        
-        # Process the data (convert dates, etc.)
-        df = prepare_data(df)
-        
-        # Filter by keyword
-        keyword_df = df[df['Keyword'] == keyword]
-        if keyword_df.empty:
-            return jsonify({'error': f'No data for keyword "{keyword}"'})
-        
-        # Convert the 'Time' column to date objects
-        if 'Time' in df.columns:
-            keyword_df['date'] = pd.to_datetime(keyword_df['Time'], errors='coerce').dt.date
-        else:
-            return jsonify({'error': 'No date information found'})
-        
-        # Convert the selected date strings to date objects
-        start_date = pd.to_datetime(start_date_str).date()
-        end_date = pd.to_datetime(end_date_str).date()
-        
-        # Filter the DataFrame for the two selected dates
-        start_data = keyword_df[keyword_df['date'] == start_date].copy()
-        end_data = keyword_df[keyword_df['date'] == end_date].copy()
-        
-        # Debug: Check number of rows for each filtered date
-        print(f"Rows for start date {start_date}: {len(start_data)}")
-        print(f"Rows for end date {end_date}: {len(end_data)}")
-        
-        if start_data.empty and end_data.empty:
-            return jsonify({'error': f'No data for dates: {start_date_str} / {end_date_str}'})
-        
-        # ======== PREPARE START DATE DATA ========
-        start_urls = []
-        if not start_data.empty:
-            # Sort by Position (ascending)
-            start_data_sorted = start_data.sort_values(by='Position', ascending=True)
-            
-            # Get all URLs and positions
-            for idx, row in start_data_sorted.iterrows():
-                start_urls.append({
-                    'url': row['Results'],
-                    'position': int(row['Position']) if isinstance(row['Position'], (int, float)) else None,
-                    'domain': row.get('domain', ''),
-                })
-        
-        # ======== PREPARE END DATE DATA ========
-        end_urls = []
-        if not end_data.empty:
-            # Sort by Position (ascending)
-            end_data_sorted = end_data.sort_values(by='Position', ascending=True)
-            
-            # Get all URLs and positions
-            for idx, row in end_data_sorted.iterrows():
-                end_urls.append({
-                    'url': row['Results'],
-                    'position': int(row['Position']) if isinstance(row['Position'], (int, float)) else None,
-                    'domain': row.get('domain', ''),
-                })
-        
-        # Return separate lists for both dates
-        return jsonify({
-            'success': True,
-            'keyword': keyword,
-            'start_date': start_date_str,
-            'end_date': end_date_str,
-            'start_urls': start_urls,
-            'end_urls': end_urls,
-            'start_count': len(start_urls),
-            'end_count': len(end_urls)
-        })
-        
-    except Exception as e:
-        import traceback
-        print(traceback.format_exc())
-        return jsonify({'error': str(e)})
 
-
+    except Exception as e:
+        import traceback
+        traceback_str = traceback.format_exc()
+        print(traceback_str)
+        return jsonify({'error': str(e), 'traceback': traceback_str})
 
 if __name__ == '__main__':
     import sys
