@@ -75,6 +75,17 @@ def get_domain(url):
 
 def prepare_data(df):
     """Prepare data for analysis"""
+    # Make a copy to avoid modifying the original
+    df = df.copy()
+    
+    # Check for empty dataframe
+    if df.empty:
+        st.warning("Empty dataframe received. Using sample data instead.")
+        return generate_sample_data()
+    
+    # Print column information
+    st.write(f"Found columns: {df.columns.tolist()}")
+    
     # Check for special format (position at end of URL)
     # Format: URL + Position + Keyword + DateTime (all in one row without proper columns)
     if len(df.columns) == 1:
@@ -112,8 +123,23 @@ def prepare_data(df):
             
         except Exception as e:
             st.error(f"Error parsing single column format: {str(e)}")
+            
+    # If we have a CSV without proper columns, try to identify and rename them
+    if all(col.isdigit() or col.startswith('Unnamed:') for col in df.columns):
+        st.info("CSV file with unnamed columns - trying to identify columns")
+        # Check if it has the expected number of columns
+        if len(df.columns) >= 4:
+            # Rename columns based on position
+            column_mapping = {
+                df.columns[0]: 'Keyword',
+                df.columns[1]: 'Time',
+                df.columns[2]: 'Results',
+                df.columns[3]: 'Position'
+            }
+            df = df.rename(columns=column_mapping)
+            st.success("Successfully renamed columns")
     
-    # Continue with normal processing if the special format wasn't detected
+    # Continue with normal processing
     # Convert key columns to strings to prevent type issues
     if 'Results' in df.columns:
         df['Results'] = df['Results'].astype(str)
@@ -132,15 +158,41 @@ def prepare_data(df):
         if col in df.columns:
             try:
                 df[col] = pd.to_datetime(df[col], errors='coerce')
-            except:
-                pass
+            except Exception as e:
+                st.warning(f"Error converting {col} to datetime: {e}")
     
     # Add date column (without time)
     if 'Time' in df.columns:
-        df['date'] = pd.NaT
-        mask = df['Time'].notna()
-        if mask.any():
-            df.loc[mask, 'date'] = df.loc[mask, 'Time'].dt.date
+        try:
+            df['date'] = pd.NaT
+            mask = df['Time'].notna()
+            if mask.any():
+                df.loc[mask, 'date'] = df.loc[mask, 'Time'].dt.date
+        except Exception as e:
+            st.warning(f"Error creating date column: {e}")
+            # Create a simpler date column
+            try:
+                df['date'] = df['Time'].apply(lambda x: pd.to_datetime(x).date() if pd.notna(x) else None)
+            except:
+                pass
+    
+    # Handle case where we don't have expected columns
+    if 'Keyword' not in df.columns or 'Results' not in df.columns or 'Position' not in df.columns:
+        st.warning("Missing expected columns in the data. Using first rows as headers.")
+        # Try to use the first row as header if possible
+        try:
+            new_header = df.iloc[0]
+            df = df.iloc[1:]
+            df.columns = new_header
+            
+            # Try again with key columns
+            if 'Results' in df.columns:
+                df['Results'] = df['Results'].astype(str)
+                df['domain'] = df['Results'].apply(get_domain)
+            if 'Keyword' in df.columns:
+                df['Keyword'] = df['Keyword'].astype(str)
+        except:
+            st.error("Could not process data format")
     
     return df
 
@@ -158,8 +210,23 @@ def get_date_range(df):
         max_date = valid_dates.max()
         
         # Format dates safely
-        min_date_str = min_date.strftime('%Y-%m-%d') if isinstance(min_date, datetime.date) else str(min_date).split(' ')[0]
-        max_date_str = max_date.strftime('%Y-%m-%d') if isinstance(max_date, datetime.date) else str(max_date).split(' ')[0]
+        try:
+            if isinstance(min_date, datetime.date):
+                min_date_str = min_date.strftime('%Y-%m-%d')
+            else:
+                min_str = str(min_date)
+                min_date_str = min_str.split(' ')[0] if ' ' in min_str else min_str
+        except:
+            min_date_str = "N/A"
+            
+        try:
+            if isinstance(max_date, datetime.date):
+                max_date_str = max_date.strftime('%Y-%m-%d')
+            else:
+                max_str = str(max_date)
+                max_date_str = max_str.split(' ')[0] if ' ' in max_str else max_str
+        except:
+            max_date_str = "N/A"
         
         return [min_date_str, max_date_str]
     except:
@@ -217,7 +284,24 @@ def load_data_from_sheet():
         def fetch_sheet_data():
             try:
                 # Fetch CSV data from the export URL
-                return pd.read_csv(SHEET_CSV_EXPORT_URL)
+                try:
+                    # First try with pandas read_csv
+                    df = pd.read_csv(SHEET_CSV_EXPORT_URL)
+                    return df
+                except Exception as e1:
+                    st.warning(f"Error with direct CSV read: {e1}")
+                    # If that fails, try with requests
+                    try:
+                        response = requests.get(SHEET_CSV_EXPORT_URL)
+                        if response.status_code == 200:
+                            csv_content = response.content
+                            df = pd.read_csv(io.StringIO(csv_content.decode('utf-8')))
+                            return df
+                        else:
+                            raise Exception(f"Failed to fetch data: HTTP {response.status_code}")
+                    except Exception as e2:
+                        st.warning(f"Error with requests method: {e2}")
+                        raise Exception("All connection methods failed")
             except Exception as e:
                 st.warning(f"Could not connect to Google Sheet: {e}")
                 st.info("Using sample data instead.")
@@ -286,10 +370,26 @@ def main():
             else:
                 st.session_state.keywords = ["No keywords available"]
             
-            if 'date' in processed_df.columns:
-                dates = sorted(processed_df['date'].dropna().unique())
-                st.session_state.dates = [d.strftime('%Y-%m-%d') if isinstance(d, datetime.date) else str(d).split(' ')[0] 
-                              for d in dates]
+            if 'date' in processed_df.columns and not processed_df['date'].isna().all():
+                # Filter out None values and safely get unique dates
+                valid_dates = processed_df['date'].dropna().unique()
+                date_strings = []
+                
+                for d in valid_dates:
+                    try:
+                        if isinstance(d, datetime.date):
+                            date_strings.append(d.strftime('%Y-%m-%d'))
+                        elif isinstance(d, str):
+                            parts = d.split(' ')
+                            if len(parts) > 0:
+                                date_strings.append(parts[0])
+                        else:
+                            date_strings.append(str(d))
+                    except:
+                        # Skip dates that can't be formatted
+                        pass
+                
+                st.session_state.dates = sorted(date_strings) if date_strings else []
             else:
                 st.session_state.dates = []
             
