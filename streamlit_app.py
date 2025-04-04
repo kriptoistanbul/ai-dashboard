@@ -297,7 +297,7 @@ def display_data_summary(df):
     
     # Show a preview of the data
     st.subheader("Data Preview")
-    st.dataframe(df.head(10), use_container_width=True)
+    st.dataframe(df.head(10))
 
 def dashboard_tab():
     st.header("SEO Position Tracking Dashboard")
@@ -468,11 +468,11 @@ def dashboard_tab():
             keyword_volume = filtered_df.groupby('Keyword')['Results'].nunique().reset_index()
             keyword_volume = keyword_volume.sort_values('Results', ascending=False).head(10)
             
-            st.dataframe(
-                keyword_volume.rename(columns={'Keyword': 'Keyword', 'Results': 'Number of URLs'}),
-                use_container_width=True,
-                hide_index=True
-            )
+            # Rename columns for display
+            display_df = keyword_volume.copy()
+            display_df.columns = ['Keyword', 'Number of URLs']
+            
+            st.dataframe(display_df)
         else:
             st.info("No keyword data available.")
     
@@ -481,14 +481,10 @@ def dashboard_tab():
         
         if 'domain' in filtered_df.columns:
             domain_freq = filtered_df['domain'].value_counts().reset_index()
-            domain_freq.columns = ['domain', 'count']
+            domain_freq.columns = ['Domain', 'Frequency']
             domain_freq = domain_freq.head(10)
             
-            st.dataframe(
-                domain_freq.rename(columns={'domain': 'Domain', 'count': 'Frequency'}),
-                use_container_width=True,
-                hide_index=True
-            )
+            st.dataframe(domain_freq)
         else:
             st.info("No domain data available.")
 
@@ -1117,16 +1113,22 @@ def time_comparison_tab():
         
         # Prepare data for display
         start_urls = []
+        end_positions = {}
+        
+        # Create mapping of URLs to positions for end data
+        if not end_data.empty:
+            for idx, row in end_data.iterrows():
+                if pd.notna(row['Results']) and pd.notna(row['Position']):
+                    try:
+                        pos_value = int(row['Position']) if isinstance(row['Position'], (int, float)) else row['Position']
+                        end_positions[row['Results']] = pos_value
+                    except:
+                        pass
+        
+        # Process start data
         if not start_data.empty:
             # Sort by Position (ascending - lower numbers = better ranking)
             start_data_sorted = start_data.sort_values(by='Position', ascending=True)
-            
-            # Create URL to position mapping for end data to calculate changes
-            end_positions = {}
-            if not end_data.empty:
-                for idx, row in end_data.iterrows():
-                    if pd.notna(row['Results']) and pd.notna(row['Position']):
-                        end_positions[row['Results']] = int(row['Position']) if isinstance(row['Position'], (int, float)) else row['Position']
             
             # Collect ALL URLs and positions
             for idx, row in start_data_sorted.iterrows():
@@ -1167,17 +1169,16 @@ def time_comparison_tab():
                         st.error(f"Error processing start URL {url}: {str(e)}")
                         continue
         
+        # Create mapping of URLs to positions for start data
+        start_positions = {}
+        for item in start_urls:
+            start_positions[item['url']] = item['position']
+        
+        # Process end data
         end_urls = []
         if not end_data.empty:
             # Sort by Position (ascending - lower numbers = better ranking)
             end_data_sorted = end_data.sort_values(by='Position', ascending=True)
-            
-            # Create URL to position mapping for start data to calculate changes
-            start_positions = {}
-            if not start_data.empty:
-                for idx, row in start_data.iterrows():
-                    if pd.notna(row['Results']) and pd.notna(row['Position']):
-                        start_positions[row['Results']] = int(row['Position']) if isinstance(row['Position'], (int, float)) else row['Position']
             
             # Collect ALL URLs and positions
             for idx, row in end_data_sorted.iterrows():
@@ -1223,20 +1224,16 @@ def time_comparison_tab():
         all_urls = set()
         position_changes = []
         
-        for url_data in start_urls:
-            all_urls.add(url_data['url'])
-        
-        for url_data in end_urls:
-            all_urls.add(url_data['url'])
-        
-        # Create combined start and end mappings
-        start_pos_map = {item['url']: item['position'] for item in start_urls}
-        end_pos_map = {item['url']: item['position'] for item in end_urls}
+        # Add all URLs from start and end data
+        for item in start_urls:
+            all_urls.add(item['url'])
+        for item in end_urls:
+            all_urls.add(item['url'])
         
         # Build the position changes data for ALL URLs
         for url in all_urls:
-            start_pos = start_pos_map.get(url, None)
-            end_pos = end_pos_map.get(url, None)
+            start_pos = start_positions.get(url, None)
+            end_pos = end_positions.get(url, None)
             
             # Only include if at least one position exists
             if start_pos is not None or end_pos is not None:
@@ -1275,9 +1272,9 @@ def time_comparison_tab():
         position_changes = sorted(position_changes, 
             key=lambda x: (
                 # Sort order: first by status (changed, then new/dropped, then unchanged)
-                0 if x['status'] in ('improved', 'declined') else (1 if x['status'] in ('new', 'dropped') else 2),
+                0 if x.get('status') in ('improved', 'declined') else (1 if x.get('status') in ('new', 'dropped') else 2),
                 # Then by absolute change value (descending)
-                abs(x['change']) if x['change'] is not None else 0
+                abs(x.get('change', 0)) if x.get('change') is not None else 0
             ), 
             reverse=True
         )
@@ -1302,20 +1299,32 @@ def time_comparison_tab():
         st.subheader("Start Date URLs")
         st.write("Sorted by position (best positions first)")
         
-        start_urls_df = pd.DataFrame(start_urls)
-        if not start_urls_df.empty:
-            st.dataframe(
-                start_urls_df[['position', 'url', 'domain', 'position_change_text']].rename(
-                    columns={
-                        'position': 'Position',
-                        'url': 'URL',
-                        'domain': 'Domain',
-                        'position_change_text': 'Position Change'
-                    }
-                ),
-                use_container_width=True,
-                hide_index=True
-            )
+        if start_urls:
+            # Convert list of dictionaries to DataFrame
+            start_urls_df = pd.DataFrame(start_urls)
+            
+            # Create a display DataFrame with proper column names
+            display_columns = {
+                'position': 'Position',
+                'url': 'URL',
+                'domain': 'Domain',
+                'position_change_text': 'Position Change'
+            }
+            
+            # Only include columns that actually exist
+            valid_columns = [col for col in display_columns.keys() if col in start_urls_df.columns]
+            
+            if valid_columns:
+                # Create display DataFrame with renamed columns
+                display_df = start_urls_df[valid_columns].copy()
+                # Rename columns one by one to avoid KeyError
+                for old_col, new_col in display_columns.items():
+                    if old_col in display_df.columns:
+                        display_df = display_df.rename(columns={old_col: new_col})
+                
+                st.dataframe(display_df)
+            else:
+                st.info("No valid columns found in start URLs data.")
         else:
             st.info("No URLs found for start date.")
         
@@ -1323,20 +1332,32 @@ def time_comparison_tab():
         st.subheader("End Date URLs")
         st.write("Sorted by position (best positions first)")
         
-        end_urls_df = pd.DataFrame(end_urls)
-        if not end_urls_df.empty:
-            st.dataframe(
-                end_urls_df[['position', 'url', 'domain', 'position_change_text']].rename(
-                    columns={
-                        'position': 'Position',
-                        'url': 'URL',
-                        'domain': 'Domain',
-                        'position_change_text': 'Position Change'
-                    }
-                ),
-                use_container_width=True,
-                hide_index=True
-            )
+        if end_urls:
+            # Convert list of dictionaries to DataFrame
+            end_urls_df = pd.DataFrame(end_urls)
+            
+            # Create a display DataFrame with proper column names
+            display_columns = {
+                'position': 'Position',
+                'url': 'URL',
+                'domain': 'Domain',
+                'position_change_text': 'Position Change'
+            }
+            
+            # Only include columns that actually exist
+            valid_columns = [col for col in display_columns.keys() if col in end_urls_df.columns]
+            
+            if valid_columns:
+                # Create display DataFrame with renamed columns
+                display_df = end_urls_df[valid_columns].copy()
+                # Rename columns one by one to avoid KeyError
+                for old_col, new_col in display_columns.items():
+                    if old_col in display_df.columns:
+                        display_df = display_df.rename(columns={old_col: new_col})
+                
+                st.dataframe(display_df)
+            else:
+                st.info("No valid columns found in end URLs data.")
         else:
             st.info("No URLs found for end date.")
         
@@ -1344,28 +1365,47 @@ def time_comparison_tab():
         st.subheader("Position Changes Analysis")
         st.write("All URLs with their position changes")
         
-        position_changes_df = pd.DataFrame(position_changes)
-        if not position_changes_df.empty:
+        if position_changes:
+            # Convert list of dictionaries to DataFrame
+            position_changes_df = pd.DataFrame(position_changes)
+            
             # Format the dataframe for display
             display_df = position_changes_df.copy()
             
             # Add styling for improved/declined
-            display_df['start_position'] = display_df['start_position'].apply(lambda x: str(x) if pd.notna(x) else "N/A")
-            display_df['end_position'] = display_df['end_position'].apply(lambda x: str(x) if pd.notna(x) else "N/A")
+            if 'start_position' in display_df.columns:
+                display_df['start_position'] = display_df['start_position'].apply(
+                    lambda x: str(x) if pd.notna(x) else "N/A"
+                )
             
-            st.dataframe(
-                display_df[['url', 'domain', 'start_position', 'end_position', 'change_text']].rename(
-                    columns={
-                        'url': 'URL',
-                        'domain': 'Domain',
-                        'start_position': 'Start Position',
-                        'end_position': 'End Position',
-                        'change_text': 'Change'
-                    }
-                ),
-                use_container_width=True,
-                hide_index=True
-            )
+            if 'end_position' in display_df.columns:
+                display_df['end_position'] = display_df['end_position'].apply(
+                    lambda x: str(x) if pd.notna(x) else "N/A"
+                )
+            
+            # Define display columns
+            display_columns = {
+                'url': 'URL',
+                'domain': 'Domain',
+                'start_position': 'Start Position',
+                'end_position': 'End Position',
+                'change_text': 'Change'
+            }
+            
+            # Only include columns that actually exist
+            valid_columns = [col for col in display_columns.keys() if col in display_df.columns]
+            
+            if valid_columns:
+                # Create display DataFrame with renamed columns
+                result_df = display_df[valid_columns].copy()
+                # Rename columns one by one to avoid KeyError
+                for old_col, new_col in display_columns.items():
+                    if old_col in result_df.columns:
+                        result_df = result_df.rename(columns={old_col: new_col})
+                
+                st.dataframe(result_df)
+            else:
+                st.info("No valid columns found in position changes data.")
         else:
             st.info("No position changes to display.")
 
