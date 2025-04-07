@@ -390,7 +390,7 @@ def dashboard_overview(df):
     col1, col2 = st.columns(2)
     
     with col1:
-        st.subheader("Top Keywords by Volume")
+        st.subheader("Top Keywords by Scraping Frequency")
         
         if 'Keyword' in filtered_df.columns and 'Results' in filtered_df.columns and not filtered_df.empty:
             keyword_volume = filtered_df.groupby('Keyword')['Results'].nunique().reset_index()
