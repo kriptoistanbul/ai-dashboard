@@ -8,13 +8,13 @@ import numpy as np
 import io
 import re
 import datetime
-import gspread
-from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
+import requests
 
 # Google Sheet Configuration
 SHEET_ID = "1Z8S-lJygDcuB3gs120EoXLVMtZzgp7HQrjtNkkOqJQs"
 SHEET_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/edit#gid=0"
+SHEET_CSV_EXPORT_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid=0"
 
 # Set page configuration
 st.set_page_config(
@@ -75,6 +75,17 @@ def get_domain(url):
 
 def prepare_data(df):
     """Prepare data for analysis"""
+    # Make a copy to avoid modifying the original
+    df = df.copy()
+    
+    # Check for empty dataframe
+    if df.empty:
+        st.warning("Empty dataframe received. Using sample data instead.")
+        return generate_sample_data()
+    
+    # Print column information
+    st.write(f"Found columns: {df.columns.tolist()}")
+    
     # Check for special format (position at end of URL)
     # Format: URL + Position + Keyword + DateTime (all in one row without proper columns)
     if len(df.columns) == 1:
@@ -112,8 +123,23 @@ def prepare_data(df):
 
         except Exception as e:
             st.error(f"Error parsing single column format: {str(e)}")
+            
+    # If we have a CSV without proper columns, try to identify and rename them
+    if all(col.isdigit() or col.startswith('Unnamed:') for col in df.columns):
+        st.info("CSV file with unnamed columns - trying to identify columns")
+        # Check if it has the expected number of columns
+        if len(df.columns) >= 4:
+            # Rename columns based on position
+            column_mapping = {
+                df.columns[0]: 'Keyword',
+                df.columns[1]: 'Time',
+                df.columns[2]: 'Results',
+                df.columns[3]: 'Position'
+            }
+            df = df.rename(columns=column_mapping)
+            st.success("Successfully renamed columns")
 
-    # Continue with normal processing if the special format wasn't detected
+    # Continue with normal processing
     # Convert key columns to strings to prevent type issues
     if 'Results' in df.columns:
         df['Results'] = df['Results'].astype(str)
@@ -132,15 +158,41 @@ def prepare_data(df):
         if col in df.columns:
             try:
                 df[col] = pd.to_datetime(df[col], errors='coerce')
-            except:
-                pass
+            except Exception as e:
+                st.warning(f"Error converting {col} to datetime: {e}")
 
     # Add date column (without time)
     if 'Time' in df.columns:
-        df['date'] = pd.NaT
-        mask = df['Time'].notna()
-        if mask.any():
-            df.loc[mask, 'date'] = df.loc[mask, 'Time'].dt.date
+        try:
+            df['date'] = pd.NaT
+            mask = df['Time'].notna()
+            if mask.any():
+                df.loc[mask, 'date'] = df.loc[mask, 'Time'].dt.date
+        except Exception as e:
+            st.warning(f"Error creating date column: {e}")
+            # Create a simpler date column
+            try:
+                df['date'] = df['Time'].apply(lambda x: pd.to_datetime(x).date() if pd.notna(x) else None)
+            except:
+                pass
+    
+    # Handle case where we don't have expected columns
+    if 'Keyword' not in df.columns or 'Results' not in df.columns or 'Position' not in df.columns:
+        st.warning("Missing expected columns in the data. Using first rows as headers.")
+        # Try to use the first row as header if possible
+        try:
+            new_header = df.iloc[0]
+            df = df.iloc[1:]
+            df.columns = new_header
+            
+            # Try again with key columns
+            if 'Results' in df.columns:
+                df['Results'] = df['Results'].astype(str)
+                df['domain'] = df['Results'].apply(get_domain)
+            if 'Keyword' in df.columns:
+                df['Keyword'] = df['Keyword'].astype(str)
+        except:
+            st.error("Could not process data format")
 
     return df
 
@@ -158,8 +210,23 @@ def get_date_range(df):
         max_date = valid_dates.max()
 
         # Format dates safely
-        min_date_str = min_date.strftime('%Y-%m-%d') if isinstance(min_date, datetime.date) else str(min_date).split(' ')[0]
-        max_date_str = max_date.strftime('%Y-%m-%d') if isinstance(max_date, datetime.date) else str(max_date).split(' ')[0]
+        try:
+            if isinstance(min_date, datetime.date):
+                min_date_str = min_date.strftime('%Y-%m-%d')
+            else:
+                min_str = str(min_date)
+                min_date_str = min_str.split(' ')[0] if ' ' in min_str else min_str
+        except:
+            min_date_str = "N/A"
+            
+        try:
+            if isinstance(max_date, datetime.date):
+                max_date_str = max_date.strftime('%Y-%m-%d')
+            else:
+                max_str = str(max_date)
+                max_date_str = max_str.split(' ')[0] if ' ' in max_str else max_str
+        except:
+            max_date_str = "N/A"
 
         return [min_date_str, max_date_str]
     except:
@@ -209,33 +276,39 @@ def apply_domain_filter(df, domain):
 
     return df[df['domain'] == domain]
 
-def load_data_from_gsheet():
-    """Load data from Google Sheets"""
+def load_data_from_sheet():
+    """Load data from Google Sheet CSV export"""
     try:
         # Use caching to prevent reloading the data on every UI interaction
         @st.cache_data(ttl=300)
         def fetch_sheet_data():
-            # Setup the Sheets API
-            scope = ['https://spreadsheets.google.com/feeds',
-                     'https://www.googleapis.com/auth/drive']
-            
             try:
-                # Try to authenticate and access the sheet
-                credentials = ServiceAccountCredentials.from_json_keyfile_name('google_credentials.json', scope)
-                client = gspread.authorize(credentials)
-                
-                # Open by sheet ID instead of name
-                sheet = client.open_by_key(SHEET_ID).sheet1
-                data = sheet.get_all_records()
-                return pd.DataFrame(data)
-                
+                # Fetch CSV data from the export URL
+                try:
+                    # First try with pandas read_csv
+                    df = pd.read_csv(SHEET_CSV_EXPORT_URL)
+                    return df
+                except Exception as e1:
+                    st.warning(f"Error with direct CSV read: {e1}")
+                    # If that fails, try with requests
+                    try:
+                        response = requests.get(SHEET_CSV_EXPORT_URL)
+                        if response.status_code == 200:
+                            csv_content = response.content
+                            df = pd.read_csv(io.StringIO(csv_content.decode('utf-8')))
+                            return df
+                        else:
+                            raise Exception(f"Failed to fetch data: HTTP {response.status_code}")
+                    except Exception as e2:
+                        st.warning(f"Error with requests method: {e2}")
+                        raise Exception("All connection methods failed")
             except Exception as e:
-                st.warning(f"Could not connect to the specified Google Sheet: {e}")
-                st.info("Using sample data instead. To use your own data, ensure proper credentials are set up.")
-                
-                # Generate sample data if Google Sheets connection fails
+                st.warning(f"Could not connect to Google Sheet: {e}")
+                st.info("Using sample data instead.")
+
+                # Generate sample data if connection fails
                 return generate_sample_data()
-        
+
         return fetch_sheet_data()
     except Exception as e:
         st.error(f"Error loading data: {e}")
@@ -278,9 +351,65 @@ def generate_sample_data():
 def main():
     st.markdown('<h1 class="main-header">Advanced SEO Position Tracker</h1>', unsafe_allow_html=True)
 
+    # Attempt to load data from Google Sheet
+    with st.spinner("Loading data from Google Sheet..."):
+        df = load_data_from_sheet()
+
+        if not df.empty:
+            # Process the data
+            st.info(f"Processing data from: {SHEET_URL}")
+            processed_df = prepare_data(df)
+
+            # Store in session state
+            st.session_state.data = df
+            st.session_state.processed_data = processed_df
+
+            # Extract unique values for filters
+            if 'Keyword' in processed_df.columns:
+                st.session_state.keywords = ["All Keywords"] + sorted(processed_df['Keyword'].unique().tolist())
+            else:
+                st.session_state.keywords = ["No keywords available"]
+
+            if 'date' in processed_df.columns and not processed_df['date'].isna().all():
+                # Filter out None values and safely get unique dates
+                valid_dates = processed_df['date'].dropna().unique()
+                date_strings = []
+                
+                for d in valid_dates:
+                    try:
+                        if isinstance(d, datetime.date):
+                            date_strings.append(d.strftime('%Y-%m-%d'))
+                        elif isinstance(d, str):
+                            parts = d.split(' ')
+                            if len(parts) > 0:
+                                date_strings.append(parts[0])
+                        else:
+                            date_strings.append(str(d))
+                    except:
+                        # Skip dates that can't be formatted
+                        pass
+                
+                st.session_state.dates = sorted(date_strings) if date_strings else []
+            else:
+                st.session_state.dates = []
+
+            if 'Results' in processed_df.columns:
+                st.session_state.urls = sorted(processed_df['Results'].dropna().unique().tolist())
+            else:
+                st.session_state.urls = []
+
+            # Get summary statistics
+            st.session_state.summary = {
+                'total_keywords': processed_df['Keyword'].nunique() if 'Keyword' in processed_df.columns else 0,
+                'total_domains': processed_df['domain'].nunique() if 'domain' in processed_df.columns else 0,
+                'total_urls': processed_df['Results'].nunique() if 'Results' in processed_df.columns else 0,
+                'date_range': get_date_range(processed_df)
+            }
+
+            st.success(f"Data loaded and processed successfully! {len(processed_df)} rows found.")
+
     # Create tabs for different sections
     tabs = st.tabs([
-        "📤 Upload Data", 
         "📊 Dashboard", 
         "🔑 Keyword Analysis", 
         "🌐 Domain Analysis", 
@@ -288,7 +417,7 @@ def main():
         "⏱️ Time Comparison"
     ])
 
-    # Initialize session state for data storage
+    # Initialize session state for data storage if not already done
     if 'data' not in st.session_state:
         st.session_state.data = None
     if 'processed_data' not in st.session_state:
@@ -302,157 +431,25 @@ def main():
     if 'summary' not in st.session_state:
         st.session_state.summary = {}
 
-    # Tab 1: Upload Data
-    with tabs[0]:
-        st.markdown('<h2 class="section-header">Upload Excel Data</h2>', unsafe_allow_html=True)
-
-        col1, col2 = st.columns([1, 1])
-
-        with col1:
-            st.info("Your Excel file should contain columns for Keyword, Results (URLs), Position, and Time.")
-
-            data_source = st.radio(
-                "Select Data Source",
-                ["Upload Excel File", "Connect to Google Sheets", "Use Sample Data"],
-                index=2
-            )
-
-            if data_source == "Upload Excel File":
-                uploaded_file = st.file_uploader("Select Excel File", type=['xlsx', 'xls', 'csv'])
-
-                if uploaded_file is not None:
-                    try:
-                        # Determine file type and read accordingly
-                        if uploaded_file.name.endswith('.csv'):
-                            df = pd.read_csv(uploaded_file)
-                        else:
-                            df = pd.read_excel(uploaded_file)
-
-                        st.session_state.data = df
-
-                        # Process the data
-                        with st.spinner("Processing data..."):
-                            processed_df = prepare_data(df)
-                            st.session_state.processed_data = processed_df
-
-                            # Extract unique values for filters
-                            if 'Keyword' in processed_df.columns:
-                                st.session_state.keywords = ["All Keywords"] + sorted(processed_df['Keyword'].unique().tolist())
-
-                            if 'date' in processed_df.columns:
-                                dates = sorted(processed_df['date'].dropna().unique())
-                                st.session_state.dates = [d.strftime('%Y-%m-%d') if isinstance(d, datetime.date) else str(d).split(' ')[0] 
-                                              for d in dates]
-
-                            if 'Results' in processed_df.columns:
-                                st.session_state.urls = sorted(processed_df['Results'].dropna().unique().tolist())
-
-                            # Get summary statistics
-                            st.session_state.summary = {
-                                'total_keywords': processed_df['Keyword'].nunique() if 'Keyword' in processed_df.columns else 0,
-                                'total_domains': processed_df['domain'].nunique() if 'domain' in processed_df.columns else 0,
-                                'total_urls': processed_df['Results'].nunique() if 'Results' in processed_df.columns else 0,
-                                'date_range': get_date_range(processed_df)
-                            }
-
-                        st.success(f"Data loaded and processed successfully! {len(processed_df)} rows found.")
-
-                    except Exception as e:
-                        st.error(f"Error processing file: {str(e)}")
-
-            elif data_source == "Connect to Google Sheets":
-                st.info(f"Connecting to Google Sheet: {SHEET_URL}")
-                
-                with st.spinner("Loading data from Google Sheets..."):
-                    df = load_data_from_gsheet()
-                    
-                    if not df.empty:
-                        st.session_state.data = df
-                        
-                        # Process the data
-                        processed_df = prepare_data(df)
-                        st.session_state.processed_data = processed_df
-                        
-                        # Extract unique values for filters
-                        if 'Keyword' in processed_df.columns:
-                            st.session_state.keywords = ["All Keywords"] + sorted(processed_df['Keyword'].unique().tolist())
-                        
-                        if 'date' in processed_df.columns:
-                            dates = sorted(processed_df['date'].dropna().unique())
-                            st.session_state.dates = [d.strftime('%Y-%m-%d') if isinstance(d, datetime.date) else str(d).split(' ')[0] 
-                                          for d in dates]
-                        
-                        if 'Results' in processed_df.columns:
-                            st.session_state.urls = sorted(processed_df['Results'].dropna().unique().tolist())
-                        
-                        # Get summary statistics
-                        st.session_state.summary = {
-                            'total_keywords': processed_df['Keyword'].nunique() if 'Keyword' in processed_df.columns else 0,
-                            'total_domains': processed_df['domain'].nunique() if 'domain' in processed_df.columns else 0,
-                            'total_urls': processed_df['Results'].nunique() if 'Results' in processed_df.columns else 0,
-                            'date_range': get_date_range(processed_df)
-                        }
-                        
-                        st.success(f"Data loaded from Google Sheets! {len(processed_df)} rows found.")
-            
-            else:  # Use Sample Data
-                with st.spinner("Generating sample data..."):
-                    df = generate_sample_data()
-
-                    st.session_state.data = df
-
-                    # Process the data
-                    processed_df = prepare_data(df)
-                    st.session_state.processed_data = processed_df
-
-                    # Extract unique values for filters
-                    if 'Keyword' in processed_df.columns:
-                        st.session_state.keywords = ["All Keywords"] + sorted(processed_df['Keyword'].unique().tolist())
-
-                    if 'date' in processed_df.columns:
-                        dates = sorted(processed_df['date'].dropna().unique())
-                        st.session_state.dates = [d.strftime('%Y-%m-%d') if isinstance(d, datetime.date) else str(d).split(' ')[0] 
-                                      for d in dates]
-
-                    if 'Results' in processed_df.columns:
-                        st.session_state.urls = sorted(processed_df['Results'].dropna().unique().tolist())
-
-                    # Get summary statistics
-                    st.session_state.summary = {
-                        'total_keywords': processed_df['Keyword'].nunique() if 'Keyword' in processed_df.columns else 0,
-                        'total_domains': processed_df['domain'].nunique() if 'domain' in processed_df.columns else 0,
-                        'total_urls': processed_df['Results'].nunique() if 'Results' in processed_df.columns else 0,
-                        'date_range': get_date_range(processed_df)
-                    }
-
-                    st.success(f"Sample data generated! {len(processed_df)} rows created.")
-
-        with col2:
-            if st.session_state.processed_data is not None:
-                st.markdown('<h3>Data Preview</h3>', unsafe_allow_html=True)
-                st.dataframe(st.session_state.processed_data.head(10), use_container_width=True)
-
-                st.markdown('<h3>Data Summary</h3>', unsafe_allow_html=True)
-                summary_col1, summary_col2 = st.columns(2)
-
-                with summary_col1:
-                    st.metric("Total Keywords", st.session_state.summary.get('total_keywords', 0))
-                    st.metric("Total Domains", st.session_state.summary.get('total_domains', 0))
-
-                with summary_col2:
-                    st.metric("Total URLs", st.session_state.summary.get('total_urls', 0))
-                    date_range = st.session_state.summary.get('date_range', ["N/A", "N/A"])
-                    st.metric("Date Range", f"{date_range[0]} to {date_range[1]}")
-
-    # Check if we have data before showing the other tabs
+    # Check if we have data before showing the tabs
     if st.session_state.processed_data is None:
-        for i in range(1, 6):
-            with tabs[i]:
-                st.info("Please upload or generate data first in the 'Upload Data' tab.")
+        st.error("No data available. Please check your Google Sheet URL or try again later.")
         return
 
-    # Tab 2: Dashboard
-    with tabs[1]:
+    # Display data summary
+    st.sidebar.header("Data Summary")
+    st.sidebar.metric("Total Keywords", st.session_state.summary.get('total_keywords', 0))
+    st.sidebar.metric("Total Domains", st.session_state.summary.get('total_domains', 0))
+    st.sidebar.metric("Total URLs", st.session_state.summary.get('total_urls', 0))
+    date_range = st.session_state.summary.get('date_range', ["N/A", "N/A"])
+    st.sidebar.metric("Date Range", f"{date_range[0]} to {date_range[1]}")
+
+    # Display data preview
+    if st.sidebar.checkbox("Show Data Preview"):
+        st.sidebar.dataframe(st.session_state.processed_data.head(10), use_container_width=True)
+
+    # Tab 1: Dashboard
+    with tabs[0]:
         st.markdown('<h2 class="section-header">SEO Position Tracking Dashboard</h2>', unsafe_allow_html=True)
 
         # Filters for dashboard
@@ -639,8 +636,8 @@ def main():
                     else:
                         st.error("Domain data not available")
 
-    # Tab 3: Keyword Analysis
-    with tabs[2]:
+    # Tab 2: Keyword Analysis
+    with tabs[1]:
         st.markdown('<h2 class="section-header">Keyword Analysis</h2>', unsafe_allow_html=True)
 
         # Filters for keyword analysis
@@ -845,8 +842,8 @@ def main():
                 else:
                     st.error("Domain and Position data not available")
 
-    # Tab 4: Domain Analysis
-    with tabs[3]:
+    # Tab 3: Domain Analysis
+    with tabs[2]:
         st.markdown('<h2 class="section-header">Domain Analysis</h2>', unsafe_allow_html=True)
 
         # Filters for domain analysis
@@ -1044,8 +1041,8 @@ def main():
                 else:
                     st.error("Keyword and Position data not available")
 
-    # Tab 5: URL Comparison
-    with tabs[4]:
+    # Tab 4: URL Comparison
+    with tabs[3]:
         st.markdown('<h2 class="section-header">URL Comparison</h2>', unsafe_allow_html=True)
 
         # Filters for URL comparison
@@ -1281,8 +1278,8 @@ def main():
                 else:
                     st.error("URL performance data not available")
 
-    # Tab 6: Time Comparison
-    with tabs[5]:
+    # Tab 5: Time Comparison
+    with tabs[4]:
         st.markdown('<h2 class="section-header">Time Comparison</h2>', unsafe_allow_html=True)
 
         # Filters for time comparison
