@@ -13,17 +13,17 @@ import io
 
 # Set page config
 st.set_page_config(
-    page_title="Advanced SEO Position Tracking Dashboard",
+    page_title="Ai SEO Position Tracking Dashboard",
     page_icon="📈",
     layout="wide"
 )
 
 # Set up the main layout
 def main():
-    st.title("Advanced SEO Position Tracking Dashboard")
+    st.title("Ai SEO Position Tracking Dashboard")
     
     # Show loading message while data is being fetched
-    data_load_state = st.text('Loading data from Google Sheet...')
+    data_load_state = st.text('Loading data...')
     df = load_data_from_gsheet()
     
     # Process the data
@@ -62,10 +62,10 @@ def main():
     # Footer
     st.sidebar.markdown("---")
     st.sidebar.info(
-        "This application fetches data from a Google Sheet and provides "
+        "This application fetches data from a Ai tools and provides "
         "various SEO position tracking analyses."
     )
-    st.sidebar.markdown("©️ 2025 - SEO Position Tracking Dashboard")
+    st.sidebar.markdown("©️ 2025 - Ai Position Tracking Dashboard")
 
 # Helper functions
 def get_domain(url):
@@ -77,7 +77,7 @@ def get_domain(url):
 
 @st.cache_data
 def load_data_from_gsheet():
-    """Load data from Google Sheet"""
+    """Load data"""
     url = "https://docs.google.com/spreadsheets/d/1Z8S-lJygDcuB3gs120EoXLVMtZzgp7HQrjtNkkOqJQs/export?format=csv&gid=0"
     df = pd.read_csv(url)
     return df
