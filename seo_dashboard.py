@@ -1,45 +1,124 @@
 import streamlit as st
 import pandas as pd
+from urllib.parse import urlparse
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import numpy as np
-from urllib.parse import urlparse
-import datetime
 import io
 import re
+import datetime
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
+from datetime import datetime
 
-# Set page title and layout
+# Google Sheet Configuration
+SHEET_ID = "1Z8S-lJygDcuB3gs120EoXLVMtZzgp7HQrjtNkkOqJQs"
+SHEET_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/edit#gid=0"
+
+# Set page configuration
 st.set_page_config(
-    page_title="SEO Position Tracking Dashboard",
+    page_title="Advanced SEO Position Tracker",
+    page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-st.title("SEO Position Tracking Dashboard")
+# Add custom CSS
+st.markdown("""
+<style>
+    .main-header {
+        font-size: 2.5rem;
+        font-weight: bold;
+        margin-bottom: 1rem;
+        text-align: center;
+    }
+    .section-header {
+        font-size: 1.8rem;
+        font-weight: bold;
+        margin-top: 2rem;
+        margin-bottom: 1rem;
+    }
+    .filter-container {
+        background-color: #f0f2f6;
+        padding: 1rem;
+        border-radius: 10px;
+        margin-bottom: 1rem;
+    }
+    .alert-box {
+        padding: 1rem;
+        border-radius: 5px;
+        margin: 1rem 0;
+    }
+    .success-box {
+        background-color: #d4edda;
+        color: #155724;
+    }
+    .warning-box {
+        background-color: #fff3cd;
+        color: #856404;
+    }
+    .error-box {
+        background-color: #f8d7da;
+        color: #721c24;
+    }
+</style>
+""", unsafe_allow_html=True)
 
-# Function to get domain from URL
+# Helper functions
 def get_domain(url):
     """Extract domain from URL"""
     try:
-        if pd.isna(url):
-            return None
         return urlparse(url).netloc
     except (TypeError, ValueError):
         return None
 
-# Function to prepare data for analysis
 def prepare_data(df):
     """Prepare data for analysis"""
+    # Check for special format (position at end of URL)
+    # Format: URL + Position + Keyword + DateTime (all in one row without proper columns)
+    if len(df.columns) == 1:
+        st.info("Detected single column data format - trying to parse")
+        # Extract data from single column
+        column_name = df.columns[0]
+
+        try:
+            # Create new dataframe with proper columns
+            data_list = []
+
+            for _, row in df.iterrows():
+                text = str(row[column_name])
+
+                # Try to find position and keyword pattern
+                matches = re.findall(r'(https?://[^\s]+)(\d+)(best free android vpn|[\w\s]+)(Mon|Tue|Wed|Thu|Fri|Sat|Sun)[\s\d:-]+', text)
+
+                if matches:
+                    for match in matches:
+                        url = match[0]
+                        position = int(match[1])
+                        keyword = match[2]
+                        date_part = match[3] + match[0].split(match[3])[1] if len(match) > 3 else ""
+
+                        data_list.append({
+                            'Results': url,
+                            'Position': position,
+                            'Keyword': keyword,
+                            'Time': date_part
+                        })
+
+            if data_list:
+                st.success(f"Successfully parsed {len(data_list)} rows from single column format")
+                return pd.DataFrame(data_list)
+
+        except Exception as e:
+            st.error(f"Error parsing single column format: {str(e)}")
+
+    # Continue with normal processing if the special format wasn't detected
     # Convert key columns to strings to prevent type issues
     if 'Results' in df.columns:
         df['Results'] = df['Results'].astype(str)
     if 'Keyword' in df.columns:
         df['Keyword'] = df['Keyword'].astype(str)
-
-    # Convert Position to numeric (if it exists)
-    if 'Position' in df.columns:
-        df['Position'] = pd.to_numeric(df['Position'], errors='coerce')
 
     # Add domain column
     if 'Results' in df.columns:
@@ -65,7 +144,6 @@ def prepare_data(df):
 
     return df
 
-# Function to get date range from DataFrame
 def get_date_range(df):
     """Safely get date range from dataframe"""
     if 'date' not in df.columns or df['date'].isna().all():
@@ -87,36 +165,18 @@ def get_date_range(df):
     except:
         return ["N/A", "N/A"]
 
-# Load data from Google Sheet
-@st.cache_data(ttl=3600)  # Cache the data for 1 hour
-def load_data():
-    """Load data from Google Sheet and prepare it for analysis"""
-    try:
-        # Convert Google Sheet URL to export URL (CSV format)
-        sheet_id = "1Z8S-lJygDcuB3gs120EoXLVMtZzgp7HQrjtNkkOqJQs"
-        sheet_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv"
-
-        df = pd.read_csv(sheet_url)
-        return prepare_data(df)
-    except Exception as e:
-        st.error(f"Error loading data from Google Sheet: {str(e)}")
-        return None
-
-# Apply date filter
-def apply_date_filter(df, date_range):
+def apply_date_filter(df, start_date, end_date):
     """Apply date range filter to DataFrame"""
-    if not date_range or 'date' not in df.columns:
+    if 'date' not in df.columns or not start_date or not end_date:
         return df
 
     try:
-        start_date = pd.to_datetime(date_range['start'])
-        end_date = pd.to_datetime(date_range['end'])
-        return df[(df['date'] >= start_date) & (df['date'] <= end_date)]
-    except Exception as e:
-        st.warning(f"Error applying date filter: {str(e)}")
+        start_date_dt = pd.to_datetime(start_date)
+        end_date_dt = pd.to_datetime(end_date)
+        return df[(df['date'] >= start_date_dt) & (df['date'] <= end_date_dt)]
+    except:
         return df
 
-# Apply position filter
 def apply_position_filter(df, position_min=None, position_max=None):
     """Apply position range filter to DataFrame"""
     if 'Position' not in df.columns:
@@ -132,15 +192,16 @@ def apply_position_filter(df, position_min=None, position_max=None):
 
     return filtered_df
 
-# Apply keyword filter
 def apply_keyword_filter(df, keyword):
     """Apply keyword filter to DataFrame"""
     if not keyword or 'Keyword' not in df.columns:
         return df
 
+    if keyword == "All Keywords":
+        return df
+
     return df[df['Keyword'] == keyword]
 
-# Apply domain filter
 def apply_domain_filter(df, domain):
     """Apply domain filter to DataFrame"""
     if not domain or 'domain' not in df.columns:
@@ -148,1315 +209,1403 @@ def apply_domain_filter(df, domain):
 
     return df[df['domain'] == domain]
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# Main app logic
-def main():
-    # Display loading spinner while fetching data
-    with st.spinner("Loading data from Google Sheet..."):
-        df = load_data()
-
-    if df is None:
-        st.error("Failed to load data. Please check the Google Sheet URL and try again.")
-        return
-
-    # Dashboard tabs
-    tabs = st.tabs(["Overview", "Keyword Analysis", "Domain Analysis", "URL Comparison", "Time Comparison"])
-
-    # Overview Tab
-    with tabs[0]:
-        st.header("SEO Position Tracking Dashboard Overview")
-
-        # Filter section
-        with st.expander("Filters", expanded=True):
-            col1, col2, col3 = st.columns(3)
-
-            with col1:
-                # Get min and max dates from data for the date picker
-                date_range_values = get_date_range(df)
-                default_start = datetime.datetime.now() - datetime.timedelta(days=30)
-                default_end = datetime.datetime.now()
-
-                try:
-                    if date_range_values[0] != "N/A":
-                        default_start = pd.to_datetime(date_range_values[0])
-                    if date_range_values[1] != "N/A":
-                        default_end = pd.to_datetime(date_range_values[1])
-                except:
-                    pass
-
-                date_range = st.date_input(
-                    "Date Range",
-                    value=(default_start, default_end),
-                    format="YYYY-MM-DD"
-                )
-
-            with col2:
-                all_keywords = ["All Keywords"] + sorted(df['Keyword'].unique().tolist()) if 'Keyword' in df.columns else ["No keywords found"]
-                keyword_filter = st.selectbox("Keyword Filter", all_keywords)
-
-            with col3:
-                position_cols = st.columns(2)
-                with position_cols[0]:
-                    position_min = st.number_input("Min Position", min_value=1, value=1)
-                with position_cols[1]:
-                    position_max = st.number_input("Max Position", min_value=1, value=100)
-
-        # Apply filters
-        filtered_df = df.copy()
-
-        # Apply date filter if selected
-        if len(date_range) == 2:
-            date_filter = {'start': date_range[0], 'end': date_range[1]}
-            filtered_df = apply_date_filter(filtered_df, date_filter)
-
-        # Apply keyword filter if selected
-        if keyword_filter != "All Keywords" and keyword_filter != "No keywords found":
-            filtered_df = apply_keyword_filter(filtered_df, keyword_filter)
-
-        # Apply position filter
-        filtered_df = apply_position_filter(filtered_df, position_min, position_max)
-
-        # Summary cards
-        st.subheader("Data Summary")
-        col1, col2, col3, col4 = st.columns(4)
-
-        summary = {
-            'total_keywords': filtered_df['Keyword'].nunique() if 'Keyword' in filtered_df.columns else 0,
-            'total_domains': filtered_df['domain'].nunique() if 'domain' in filtered_df.columns else 0,
-            'total_urls': filtered_df['Results'].nunique() if 'Results' in filtered_df.columns else 0,
-            'date_range': get_date_range(filtered_df)
-        }
-
-        # Add delta metrics if we have time data
-        if 'date' in filtered_df.columns and not filtered_df.empty:
+def load_data_from_gsheet():
+    """Load data from Google Sheets"""
+    try:
+        # Use caching to prevent reloading the data on every UI interaction
+        @st.cache_data(ttl=300)
+        def fetch_sheet_data():
+            # Setup the Sheets API
+            scope = ['https://spreadsheets.google.com/feeds',
+                     'https://www.googleapis.com/auth/drive']
+            
             try:
-                # Calculate change in metrics compared to previous period
-                current_period = pd.to_datetime(date_range[1]) - pd.to_datetime(date_range[0])
-                previous_start = pd.to_datetime(date_range[0]) - current_period
-                previous_end = pd.to_datetime(date_range[0]) - datetime.timedelta(days=1)
+                # Try to authenticate and access the sheet
+                credentials = ServiceAccountCredentials.from_json_keyfile_name('google_credentials.json', scope)
+                client = gspread.authorize(credentials)
+                
+                # Open by sheet ID instead of name
+                sheet = client.open_by_key(SHEET_ID).sheet1
+                data = sheet.get_all_records()
+                return pd.DataFrame(data)
+                
+            except Exception as e:
+                st.warning(f"Could not connect to the specified Google Sheet: {e}")
+                st.info("Using sample data instead. To use your own data, ensure proper credentials are set up.")
+                
+                # Generate sample data if Google Sheets connection fails
+                return generate_sample_data()
+        
+        return fetch_sheet_data()
+    except Exception as e:
+        st.error(f"Error loading data: {e}")
+        return pd.DataFrame()
 
-                previous_date_filter = {'start': previous_start, 'end': previous_end}
-                previous_df = apply_date_filter(df, previous_date_filter)
+def generate_sample_data():
+    """Generate sample SEO position data for demonstration"""
+    # Create sample keywords, domains, and dates
+    keywords = ['best vpn', 'free vpn', 'vpn service', 'secure vpn', 'fast vpn']
+    domains = ['nordvpn.com', 'expressvpn.com', 'surfshark.com', 'tunnelbear.com', 'privateinternetaccess.com', 
+              'cyberghostvpn.com', 'vyprvpn.com', 'purevpn.com', 'ipvanish.com', 'torguard.net']
 
-                # Calculate deltas
-                keywords_delta = filtered_df['Keyword'].nunique() - previous_df['Keyword'].nunique()
-                domains_delta = filtered_df['domain'].nunique() - previous_df['domain'].nunique()
-                urls_delta = filtered_df['Results'].nunique() - previous_df['Results'].nunique()
+    # Generate dates for the last 30 days
+    end_date = datetime.now()
+    dates = [(end_date - datetime.timedelta(days=i)).strftime('%Y-%m-%d') for i in range(30)]
 
-                col1.metric("Total Keywords", summary['total_keywords'], delta=keywords_delta)
-                col2.metric("Total Domains", summary['total_domains'], delta=domains_delta)
-                col3.metric("Total URLs", summary['total_urls'], delta=urls_delta)
-            except:
-                col1.metric("Total Keywords", summary['total_keywords'])
-                col2.metric("Total Domains", summary['total_domains'])
-                col3.metric("Total URLs", summary['total_urls'])
-        else:
-            col1.metric("Total Keywords", summary['total_keywords'])
-            col2.metric("Total Domains", summary['total_domains'])
-            col3.metric("Total URLs", summary['total_urls'])
+    # Generate data
+    data = []
+    for keyword in keywords:
+        for date in dates:
+            # Create a random set of URLs with positions for each keyword and date
+            positions = list(range(1, 51))  # Top 50 positions
+            np.random.shuffle(positions)
 
-        col4.metric("Date Range", f"{summary['date_range'][0]} to {summary['date_range'][1]}")
+            for i, domain in enumerate(domains):
+                if i < len(positions):
+                    position = positions[i]
+                    url = f"https://www.{domain}/page-{i+1}"
 
-        # Position distribution chart
-        if 'Position' in filtered_df.columns and not filtered_df.empty:
-            st.subheader("Position Distribution")
+                    data.append({
+                        'Keyword': keyword,
+                        'Time': date,
+                        'Results': url,
+                        'Position': position
+                    })
 
-            # Rank selector
-            rank_options = ["Top 3", "Top 5", "Top 10", "Top 20", "Top 50", "All"]
-            default_idx = 1  # Default to "Top 5"
-            selected_rank = st.radio("Position Range", rank_options, index=default_idx, horizontal=True)
+    return pd.DataFrame(data)
 
-            # Handle "All" option differently
-            if selected_rank == "All":
-                position_filtered_df = filtered_df
-            else:
-                top_rank = int(selected_rank.split(" ")[1])
-                position_filtered_df = filtered_df[filtered_df['Position'] <= top_rank]
+# Main function to run the Streamlit app
+def main():
+    st.markdown('<h1 class="main-header">Advanced SEO Position Tracker</h1>', unsafe_allow_html=True)
 
-            if not position_filtered_df.empty:
-                fig = px.histogram(
-                    position_filtered_df, 
-                    x='Position',
-                    title=f'Position Distribution ({selected_rank})',
-                    nbins=min(20, int(position_filtered_df['Position'].max())),
-                    color_discrete_sequence=['#3366CC'],
-                    opacity=0.8
-                )
+    # Create tabs for different sections
+    tabs = st.tabs([
+        "📤 Upload Data", 
+        "📊 Dashboard", 
+        "🔑 Keyword Analysis", 
+        "🌐 Domain Analysis", 
+        "🔄 URL Comparison", 
+        "⏱️ Time Comparison"
+    ])
 
-                fig.update_layout(
-                    xaxis_title="Position",
-                    yaxis_title="Count",
-                    bargap=0.1,
-                    xaxis={'categoryorder': 'total ascending'}
-                )
-                st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.info(f"No data available for position range: {selected_rank}")
+    # Initialize session state for data storage
+    if 'data' not in st.session_state:
+        st.session_state.data = None
+    if 'processed_data' not in st.session_state:
+        st.session_state.processed_data = None
+    if 'keywords' not in st.session_state:
+        st.session_state.keywords = []
+    if 'dates' not in st.session_state:
+        st.session_state.dates = []
+    if 'urls' not in st.session_state:
+        st.session_state.urls = []
+    if 'summary' not in st.session_state:
+        st.session_state.summary = {}
 
-        # Top domains chart
-        if 'domain' in filtered_df.columns and 'Position' in filtered_df.columns and not filtered_df.empty:
-            st.subheader("Top Domains by Average Position")
+    # Tab 1: Upload Data
+    with tabs[0]:
+        st.markdown('<h2 class="section-header">Upload Excel Data</h2>', unsafe_allow_html=True)
 
-            # Domain rank selector
-            domain_rank_options = ["Top 3", "Top 5", "Top 10", "Top 20"]
-            default_domain_idx = 1  # Default to "Top 5"
-            selected_domain_rank = st.radio("Domain Range", domain_rank_options, index=default_domain_idx, horizontal=True, key="domain_rank")
-            domain_rank = int(selected_domain_rank.split(" ")[1])
-
-            # Calculate domain metrics
-            domain_positions = filtered_df.groupby('domain').agg(
-                avg_position=('Position', 'mean'),
-                count=('Position', 'count')
-            ).reset_index()
-
-            # Only include domains with sufficient data
-            min_entries = 3  # Minimum number of entries required
-            domain_positions = domain_positions[domain_positions['count'] >= min_entries]
-
-            if not domain_positions.empty:
-                # Sort by average position (ascending is better)
-                domain_positions = domain_positions.sort_values('avg_position')
-
-                fig = px.bar(
-                    domain_positions.head(domain_rank), 
-                    x='domain', 
-                    y='avg_position',
-                    title=f'Top {domain_rank} Domains by Average Position',
-                    labels={'domain': 'Domain', 'avg_position': 'Average Position'},
-                    color='avg_position',
-                    color_continuous_scale='RdYlGn_r',
-                    text='count'
-                )
-
-                fig.update_layout(
-                    xaxis_title="Domain",
-                    yaxis_title="Average Position",
-                    yaxis_autorange='reversed',  # Lower positions (better rankings) at the top
-                    xaxis_tickangle=-45
-                )
-
-                fig.update_traces(texttemplate='%{text} entries', textposition='outside')
-
-                st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.info("Not enough domain data to display rankings")
-
-        # Display keyword and domain tables
-        col1, col2 = st.columns(2)
+        col1, col2 = st.columns([1, 1])
 
         with col1:
-            st.subheader("Top Keywords by Volume")
-            if 'Keyword' in filtered_df.columns and 'Results' in filtered_df.columns and not filtered_df.empty:
-                keyword_volume = filtered_df.groupby('Keyword')['Results'].nunique().reset_index()
-                keyword_volume = keyword_volume.sort_values('Results', ascending=False)
+            st.info("Your Excel file should contain columns for Keyword, Results (URLs), Position, and Time.")
 
-                if not keyword_volume.empty:
-                    keyword_volume.columns = ['Keyword', 'Number of URLs']
-                    st.dataframe(keyword_volume.head(10), use_container_width=True)
-                else:
-                    st.info("No keyword volume data available")
-            else:
-                st.info("Keyword or URL data not available")
-
-        with col2:
-            st.subheader("Top Domains by Frequency")
-            if 'domain' in filtered_df.columns and not filtered_df.empty:
-                domain_freq = filtered_df['domain'].value_counts().reset_index()
-
-                if not domain_freq.empty:
-                    domain_freq.columns = ['Domain', 'Count']
-                    st.dataframe(domain_freq.head(10), use_container_width=True)
-                else:
-                    st.info("No domain frequency data available")
-            else:
-                st.info("Domain data not available")
-
-    # Keyword Analysis Tab
-    with tabs[1]:
-        st.header("Keyword Analysis")
-
-        # Keyword selector
-        if 'Keyword' in df.columns:
-            col1, col2, col3 = st.columns(3)
-
-            with col1:
-                keywords = sorted(df['Keyword'].unique().tolist())
-                selected_keyword = st.selectbox("Select Keyword", ["-- Select a keyword --"] + keywords, key="keyword_analysis")
-
-            with col2:
-                keyword_date_range = st.date_input(
-                    "Date Range for Keyword",
-                    value=(datetime.datetime.now() - datetime.timedelta(days=30), datetime.datetime.now()),
-                    format="YYYY-MM-DD",
-                    key="keyword_date_range"
-                )
-
-            with col3:
-                domain_filter = st.text_input("Domain Filter (optional)", placeholder="e.g., example.com")
-
-            if selected_keyword != "-- Select a keyword --":
-                # Filter data for selected keyword
-                keyword_df = df[df['Keyword'] == selected_keyword]
-
-                if keyword_df.empty:
-                    st.warning(f"No data found for keyword '{selected_keyword}'")
-                else:
-                    # Apply date filter if selected
-                    if len(keyword_date_range) == 2:
-                        date_filter = {'start': keyword_date_range[0], 'end': keyword_date_range[1]}
-                        keyword_df = apply_date_filter(keyword_df, date_filter)
-
-                    # Apply domain filter if provided
-                    if domain_filter:
-                        keyword_df = apply_domain_filter(keyword_df, domain_filter)
-
-                    # Show data summary
-                    st.subheader(f"Data for: {selected_keyword}")
-
-                    summary_cols = st.columns(3)
-                    summary_cols[0].metric("Total URLs", keyword_df['Results'].nunique() if 'Results' in keyword_df.columns else 0)
-                    summary_cols[1].metric("Total Domains", keyword_df['domain'].nunique() if 'domain' in keyword_df.columns else 0)
-
-                    # Calculate average position
-                    if 'Position' in keyword_df.columns and not keyword_df.empty:
-                        avg_position = keyword_df['Position'].mean()
-                        summary_cols[2].metric("Average Position", f"{avg_position:.1f}")
-
-                    # Available dates for this keyword
-                    if 'date' in keyword_df.columns:
-                        dates = sorted(keyword_df['date'].dropna().unique())
-                        date_strings = [d.strftime('%Y-%m-%d') if isinstance(d, datetime.date) else str(d).split(' ')[0] for d in dates]
-
-                        st.subheader("Available Dates")
-                        if date_strings:
-                            st.write(", ".join(date_strings))
-                        else:
-                            st.info("No dates available for this keyword with the current filters")
-
-                    # Domain performance for this keyword
-                    if 'domain' in keyword_df.columns and 'Position' in keyword_df.columns and not keyword_df.empty:
-                        st.subheader("Domain Performance for this Keyword")
-
-                        # Rank selector for the chart
-                        domain_rank_options = ["Top 3", "Top 5", "Top 10", "Top 20"]
-                        default_domain_idx = 1  # Default to "Top 5"
-                        selected_keyword_rank = st.radio("Show", domain_rank_options, index=default_domain_idx, horizontal=True, key="keyword_domain_rank")
-                        top_rank = int(selected_keyword_rank.split(" ")[1])
-
-                        domain_positions = keyword_df.groupby('domain')['Position'].agg(['mean', 'min', 'max', 'count']).reset_index()
-
-                        # Only include domains with sufficient data
-                        domain_positions = domain_positions[domain_positions['count'] >= 2]
-                        domain_positions = domain_positions.sort_values('mean')
-
-                        if not domain_positions.empty:
-                            # Chart
-                            fig = px.bar(
-                                domain_positions.head(top_rank), 
-                                x='domain', 
-                                y='mean',
-                                error_y=domain_positions.head(top_rank)['count'],
-                                title=f'Top {top_rank} Domains for "{selected_keyword}"',
-                                labels={'domain': 'Domain', 'mean': 'Average Position'},
-                                color='mean',
-                                color_continuous_scale='RdYlGn_r',
-                                text='count'
-                            )
-
-                            fig.update_layout(
-                                xaxis_title="Domain",
-                                yaxis_title="Average Position",
-                                yaxis_autorange='reversed',  # Lower positions (better rankings) at the top
-                                xaxis_tickangle=-45
-                            )
-
-                            fig.update_traces(texttemplate='%{text} entries', textposition='outside')
-
-                            st.plotly_chart(fig, use_container_width=True)
-
-                            # Table
-                            st.subheader("Domain Rankings")
-                            st.dataframe(domain_positions.rename(columns={
-                                'mean': 'Avg Position',
-                                'min': 'Best Position',
-                                'max': 'Worst Position',
-                                'count': 'Count'
-                            }), use_container_width=True)
-
-                            # Trend over time chart (if we have date data)
-                            if 'date' in keyword_df.columns and len(domain_positions) > 0:
-                                st.subheader("Position Trend Over Time")
-
-                                # Get top domains
-                                top_domains = domain_positions.head(top_rank)['domain'].tolist()
-
-                                # Filter data for these domains
-                                trend_data = keyword_df[keyword_df['domain'].isin(top_domains)]
-
-                                if not trend_data.empty:
-                                    # Group by date and domain, calculate average position
-                                    trend_daily = trend_data.groupby(['date', 'domain'])['Position'].mean().reset_index()
-
-                                    # Create trend chart
-                                    fig = px.line(
-                                        trend_daily,
-                                        x='date',
-                                        y='Position',
-                                        color='domain',
-                                        title=f'Position Trend Over Time for "{selected_keyword}"',
-                                        labels={'date': 'Date', 'Position': 'Position', 'domain': 'Domain'},
-                                        markers=True
-                                    )
-
-                                    fig.update_layout(
-                                        xaxis_title="Date",
-                                        yaxis_title="Position",
-                                        yaxis_autorange='reversed',  # Lower positions (better rankings) at the top
-                                        legend_title="Domain"
-                                    )
-                                    st.plotly_chart(fig, use_container_width=True)
-                        else:
-                            st.info("No domain performance data available for this keyword")
-            else:
-                st.info("Please select a keyword to analyze")
-        else:
-            st.warning("Keyword column not found in data")
-
-    # Domain Analysis Tab
-    with tabs[2]:
-        st.header("Domain Analysis")
-
-        # Domain selector
-        col1, col2, col3 = st.columns(3)
-
-        with col1:
-            domain_input = st.text_input("Enter Domain", placeholder="e.g., example.com")
-
-        with col2:
-            domain_date_range = st.date_input(
-                "Date Range for Domain",
-                value=(datetime.datetime.now() - datetime.timedelta(days=30), datetime.datetime.now()),
-                format="YYYY-MM-DD",
-                key="domain_date_range"
+            data_source = st.radio(
+                "Select Data Source",
+                ["Upload Excel File", "Connect to Google Sheets", "Use Sample Data"],
+                index=2
             )
 
-        with col3:
-            position_cols = st.columns(2)
-            with position_cols[0]:
-                domain_position_min = st.number_input("Min Position", min_value=1, value=1, key="domain_min_pos")
-            with position_cols[1]:
-                domain_position_max = st.number_input("Max Position", min_value=1, value=100, key="domain_max_pos")
+            if data_source == "Upload Excel File":
+                uploaded_file = st.file_uploader("Select Excel File", type=['xlsx', 'xls', 'csv'])
 
-        analyze_domain = st.button("Analyze Domain")
+                if uploaded_file is not None:
+                    try:
+                        # Determine file type and read accordingly
+                        if uploaded_file.name.endswith('.csv'):
+                            df = pd.read_csv(uploaded_file)
+                        else:
+                            df = pd.read_excel(uploaded_file)
 
-        if domain_input and analyze_domain:
-            # Filter data for selected domain
-            domain_df = df[df['domain'] == domain_input]
+                        st.session_state.data = df
 
-            if domain_df.empty:
-                st.warning(f"No data found for domain '{domain_input}'")
+                        # Process the data
+                        with st.spinner("Processing data..."):
+                            processed_df = prepare_data(df)
+                            st.session_state.processed_data = processed_df
+
+                            # Extract unique values for filters
+                            if 'Keyword' in processed_df.columns:
+                                st.session_state.keywords = ["All Keywords"] + sorted(processed_df['Keyword'].unique().tolist())
+
+                            if 'date' in processed_df.columns:
+                                dates = sorted(processed_df['date'].dropna().unique())
+                                st.session_state.dates = [d.strftime('%Y-%m-%d') if isinstance(d, datetime.date) else str(d).split(' ')[0] 
+                                              for d in dates]
+
+                            if 'Results' in processed_df.columns:
+                                st.session_state.urls = sorted(processed_df['Results'].dropna().unique().tolist())
+
+                            # Get summary statistics
+                            st.session_state.summary = {
+                                'total_keywords': processed_df['Keyword'].nunique() if 'Keyword' in processed_df.columns else 0,
+                                'total_domains': processed_df['domain'].nunique() if 'domain' in processed_df.columns else 0,
+                                'total_urls': processed_df['Results'].nunique() if 'Results' in processed_df.columns else 0,
+                                'date_range': get_date_range(processed_df)
+                            }
+
+                        st.success(f"Data loaded and processed successfully! {len(processed_df)} rows found.")
+
+                    except Exception as e:
+                        st.error(f"Error processing file: {str(e)}")
+
+            elif data_source == "Connect to Google Sheets":
+                st.info(f"Connecting to Google Sheet: {SHEET_URL}")
+                
+                with st.spinner("Loading data from Google Sheets..."):
+                    df = load_data_from_gsheet()
+                    
+                    if not df.empty:
+                        st.session_state.data = df
+                        
+                        # Process the data
+                        processed_df = prepare_data(df)
+                        st.session_state.processed_data = processed_df
+                        
+                        # Extract unique values for filters
+                        if 'Keyword' in processed_df.columns:
+                            st.session_state.keywords = ["All Keywords"] + sorted(processed_df['Keyword'].unique().tolist())
+                        
+                        if 'date' in processed_df.columns:
+                            dates = sorted(processed_df['date'].dropna().unique())
+                            st.session_state.dates = [d.strftime('%Y-%m-%d') if isinstance(d, datetime.date) else str(d).split(' ')[0] 
+                                          for d in dates]
+                        
+                        if 'Results' in processed_df.columns:
+                            st.session_state.urls = sorted(processed_df['Results'].dropna().unique().tolist())
+                        
+                        # Get summary statistics
+                        st.session_state.summary = {
+                            'total_keywords': processed_df['Keyword'].nunique() if 'Keyword' in processed_df.columns else 0,
+                            'total_domains': processed_df['domain'].nunique() if 'domain' in processed_df.columns else 0,
+                            'total_urls': processed_df['Results'].nunique() if 'Results' in processed_df.columns else 0,
+                            'date_range': get_date_range(processed_df)
+                        }
+                        
+                        st.success(f"Data loaded from Google Sheets! {len(processed_df)} rows found.")
+            
+            else:  # Use Sample Data
+                with st.spinner("Generating sample data..."):
+                    df = generate_sample_data()
+
+                    st.session_state.data = df
+
+                    # Process the data
+                    processed_df = prepare_data(df)
+                    st.session_state.processed_data = processed_df
+
+                    # Extract unique values for filters
+                    if 'Keyword' in processed_df.columns:
+                        st.session_state.keywords = ["All Keywords"] + sorted(processed_df['Keyword'].unique().tolist())
+
+                    if 'date' in processed_df.columns:
+                        dates = sorted(processed_df['date'].dropna().unique())
+                        st.session_state.dates = [d.strftime('%Y-%m-%d') if isinstance(d, datetime.date) else str(d).split(' ')[0] 
+                                      for d in dates]
+
+                    if 'Results' in processed_df.columns:
+                        st.session_state.urls = sorted(processed_df['Results'].dropna().unique().tolist())
+
+                    # Get summary statistics
+                    st.session_state.summary = {
+                        'total_keywords': processed_df['Keyword'].nunique() if 'Keyword' in processed_df.columns else 0,
+                        'total_domains': processed_df['domain'].nunique() if 'domain' in processed_df.columns else 0,
+                        'total_urls': processed_df['Results'].nunique() if 'Results' in processed_df.columns else 0,
+                        'date_range': get_date_range(processed_df)
+                    }
+
+                    st.success(f"Sample data generated! {len(processed_df)} rows created.")
+
+        with col2:
+            if st.session_state.processed_data is not None:
+                st.markdown('<h3>Data Preview</h3>', unsafe_allow_html=True)
+                st.dataframe(st.session_state.processed_data.head(10), use_container_width=True)
+
+                st.markdown('<h3>Data Summary</h3>', unsafe_allow_html=True)
+                summary_col1, summary_col2 = st.columns(2)
+
+                with summary_col1:
+                    st.metric("Total Keywords", st.session_state.summary.get('total_keywords', 0))
+                    st.metric("Total Domains", st.session_state.summary.get('total_domains', 0))
+
+                with summary_col2:
+                    st.metric("Total URLs", st.session_state.summary.get('total_urls', 0))
+                    date_range = st.session_state.summary.get('date_range', ["N/A", "N/A"])
+                    st.metric("Date Range", f"{date_range[0]} to {date_range[1]}")
+
+    # Check if we have data before showing the other tabs
+    if st.session_state.processed_data is None:
+        for i in range(1, 6):
+            with tabs[i]:
+                st.info("Please upload or generate data first in the 'Upload Data' tab.")
+        return
+
+    # Tab 2: Dashboard
+    with tabs[1]:
+        st.markdown('<h2 class="section-header">SEO Position Tracking Dashboard</h2>', unsafe_allow_html=True)
+
+        # Filters for dashboard
+        st.markdown('<div class="filter-container">', unsafe_allow_html=True)
+        filter_col1, filter_col2, filter_col3, filter_col4 = st.columns([1, 1, 1, 1])
+
+        with filter_col1:
+            # Date range filter
+            date_range = st.session_state.summary.get('date_range', ["N/A", "N/A"])
+
+            if date_range[0] != "N/A":
+                start_date = st.date_input(
+                    "Start Date",
+                    value=pd.to_datetime(date_range[0]).date(),
+                    min_value=pd.to_datetime(date_range[0]).date(),
+                    max_value=pd.to_datetime(date_range[1]).date()
+                )
             else:
-                # Apply date filter if selected
-                if len(domain_date_range) == 2:
-                    date_filter = {'start': domain_date_range[0], 'end': domain_date_range[1]}
-                    domain_df = apply_date_filter(domain_df, date_filter)
+                start_date = st.date_input("Start Date", value=datetime.now().date())
 
-                # Apply position filter
-                domain_df = apply_position_filter(domain_df, domain_position_min, domain_position_max)
+            if date_range[1] != "N/A":
+                end_date = st.date_input(
+                    "End Date",
+                    value=pd.to_datetime(date_range[1]).date(),
+                    min_value=pd.to_datetime(date_range[0]).date(),
+                    max_value=pd.to_datetime(date_range[1]).date()
+                )
+            else:
+                end_date = st.date_input("End Date", value=datetime.now().date())
 
-                # Show domain summary
-                st.subheader(f"Analysis for: {domain_input}")
+        with filter_col2:
+            # Keyword filter
+            keyword = st.selectbox(
+                "Keyword Filter",
+                options=st.session_state.keywords,
+                index=0
+            )
 
-                summary_cols = st.columns(4)
-                summary_cols[0].metric("Total Keywords", domain_df['Keyword'].nunique() if 'Keyword' in domain_df.columns else 0)
-                summary_cols[1].metric("Total URLs", domain_df['Results'].nunique() if 'Results' in domain_df.columns else 0)
+        with filter_col3:
+            # Position range filter
+            pos_col1, pos_col2 = st.columns(2)
+            with pos_col1:
+                position_min = st.number_input("Min Position", min_value=1, value=1)
+            with pos_col2:
+                position_max = st.number_input("Max Position", min_value=1, value=100)
 
-                # Calculate position metrics
-                if 'Position' in domain_df.columns and not domain_df.empty:
-                    avg_position = domain_df['Position'].mean()
-                    best_position = domain_df['Position'].min()
-                    summary_cols[2].metric("Average Position", f"{avg_position:.1f}")
-                    summary_cols[3].metric("Best Position", f"{best_position:.0f}")
+        with filter_col4:
+            top_n_options = [3, 5, 10, 20, 50, 100]
 
-                # Keyword performance for this domain
-                if 'Keyword' in domain_df.columns and 'Position' in domain_df.columns and not domain_df.empty:
-                    # Rank selector for the chart
-                    keyword_rank_options = ["Top 3", "Top 5", "Top 10", "Top 20"]
-                    default_keyword_idx = 1  # Default to "Top 5"
-                    selected_domain_keyword_rank = st.radio("Show", keyword_rank_options, index=default_keyword_idx, horizontal=True, key="domain_keyword_rank")
-                    top_rank = int(selected_domain_keyword_rank.split(" ")[1])
+            top_n = st.selectbox(
+                "Show Top N Results",
+                options=top_n_options,
+                index=1
+            )
 
-                    keyword_perf = domain_df.groupby('Keyword')['Position'].agg(['mean', 'min', 'max', 'count']).reset_index()
-                    keyword_perf = keyword_perf.sort_values('mean')
+            # Apply filters button
+            apply_button = st.button("Apply Filters", key="dashboard_apply")
 
-                    if not keyword_perf.empty:
-                        st.subheader("Keyword Performance for this Domain")
+        st.markdown('</div>', unsafe_allow_html=True)
 
-                        # Chart
-                        fig = px.bar(
-                            keyword_perf.head(top_rank), 
-                            x='Keyword', 
-                            y='mean',
-                            title=f'Top {top_rank} Keywords for "{domain_input}"',
-                            labels={'Keyword': 'Keyword', 'mean': 'Average Position'},
-                            color='mean',
-                            color_continuous_scale='RdYlGn_r',
-                            text='count'
+        # Apply filters and generate dashboard
+        if st.session_state.processed_data is not None:
+            df = st.session_state.processed_data.copy()
+
+            # Apply filters
+            df = apply_date_filter(df, start_date, end_date)
+            df = apply_keyword_filter(df, keyword)
+            df = apply_position_filter(df, position_min, position_max)
+
+            if len(df) == 0:
+                st.warning("No data matches the selected filters.")
+            else:
+                # Create dashboard visualizations
+                col1, col2 = st.columns(2)
+
+                with col1:
+                    # Position Distribution Chart
+                    st.markdown('<h3>Position Distribution</h3>', unsafe_allow_html=True)
+
+                    if 'Position' in df.columns:
+                        pos_dist = px.histogram(
+                            df, 
+                            x='Position',
+                            title='Overall Position Distribution',
+                            labels={'Position': 'Position', 'count': 'Count'},
+                            nbins=20,
+                            color_discrete_sequence=['#3366CC']
                         )
 
-                        fig.update_layout(
+                        pos_dist.update_layout(
+                            xaxis_title="Position",
+                            yaxis_title="Count",
+                            bargap=0.1
+                        )
+
+                        st.plotly_chart(pos_dist, use_container_width=True)
+                    else:
+                        st.error("Position data not available")
+
+                with col2:
+                    # Top Domains by Average Position
+                    st.markdown('<h3>Top Domains by Average Position</h3>', unsafe_allow_html=True)
+
+                    if 'domain' in df.columns and 'Position' in df.columns:
+                        domain_positions = df.groupby('domain')['Position'].mean().reset_index()
+                        domain_positions = domain_positions.sort_values('Position')
+
+                        top_domains_chart = px.bar(
+                            domain_positions.head(top_n), 
+                            x='domain', 
+                            y='Position',
+                            title=f'Top {top_n} Domains by Average Position',
+                            labels={'domain': 'Domain', 'Position': 'Average Position'},
+                            color='Position',
+                            color_continuous_scale='RdYlGn_r'
+                        )
+
+                        top_domains_chart.update_layout(
+                            xaxis_title="Domain",
+                            yaxis_title="Average Position",
+                            yaxis_autorange='reversed'  # Lower positions (better rankings) at the top
+                        )
+
+                        st.plotly_chart(top_domains_chart, use_container_width=True)
+                    else:
+                        st.error("Domain and Position data not available")
+
+                # Additional charts in new rows
+                col3, col4 = st.columns(2)
+
+                with col3:
+                    # Top Keywords by Volume
+                    st.markdown('<h3>Top Keywords by Volume</h3>', unsafe_allow_html=True)
+
+                    if 'Keyword' in df.columns and 'Results' in df.columns:
+                        keyword_volume = df.groupby('Keyword')['Results'].nunique().reset_index()
+                        keyword_volume = keyword_volume.sort_values('Results', ascending=False)
+
+                        keyword_chart = px.bar(
+                            keyword_volume.head(top_n),
+                            x='Keyword',
+                            y='Results',
+                            title=f'Top {top_n} Keywords by Number of URLs',
+                            labels={'Keyword': 'Keyword', 'Results': 'Number of URLs'},
+                            color='Results',
+                            color_continuous_scale='Viridis'
+                        )
+
+                        keyword_chart.update_layout(
+                            xaxis_title="Keyword",
+                            yaxis_title="Number of URLs",
+                            xaxis_tickangle=-45
+                        )
+
+                        st.plotly_chart(keyword_chart, use_container_width=True)
+                    else:
+                        st.error("Keyword and Results data not available")
+
+                with col4:
+                    # Top Domains by Frequency
+                    st.markdown('<h3>Top Domains by Frequency</h3>', unsafe_allow_html=True)
+
+                    if 'domain' in df.columns:
+                        domain_freq = df['domain'].value_counts().reset_index()
+                        domain_freq.columns = ['domain', 'count']
+
+                        domain_freq_chart = px.bar(
+                            domain_freq.head(top_n),
+                            x='domain',
+                            y='count',
+                            title=f'Top {top_n} Domains by Frequency',
+                            labels={'domain': 'Domain', 'count': 'Frequency'},
+                            color='count',
+                            color_continuous_scale='Viridis'
+                        )
+
+                        domain_freq_chart.update_layout(
+                            xaxis_title="Domain",
+                            yaxis_title="Frequency",
+                            xaxis_tickangle=-45
+                        )
+
+                        st.plotly_chart(domain_freq_chart, use_container_width=True)
+                    else:
+                        st.error("Domain data not available")
+
+    # Tab 3: Keyword Analysis
+    with tabs[2]:
+        st.markdown('<h2 class="section-header">Keyword Analysis</h2>', unsafe_allow_html=True)
+
+        # Filters for keyword analysis
+        st.markdown('<div class="filter-container">', unsafe_allow_html=True)
+        kw_filter_col1, kw_filter_col2, kw_filter_col3, kw_filter_col4 = st.columns([1, 1, 1, 1])
+
+        with kw_filter_col1:
+            # Select keyword
+            selected_keyword = st.selectbox(
+                "Select Keyword",
+                options=st.session_state.keywords if len(st.session_state.keywords) > 1 else ["No keywords available"],
+                index=1 if len(st.session_state.keywords) > 1 else 0
+            )
+
+        with kw_filter_col2:
+            # Date range filter
+            date_range = st.session_state.summary.get('date_range', ["N/A", "N/A"])
+
+            if date_range[0] != "N/A":
+                kw_start_date = st.date_input(
+                    "Start Date",
+                    value=pd.to_datetime(date_range[0]).date(),
+                    min_value=pd.to_datetime(date_range[0]).date(),
+                    max_value=pd.to_datetime(date_range[1]).date(),
+                    key="kw_start_date"
+                )
+            else:
+                kw_start_date = st.date_input("Start Date", value=datetime.now().date(), key="kw_start_date")
+
+            if date_range[1] != "N/A":
+                kw_end_date = st.date_input(
+                    "End Date",
+                    value=pd.to_datetime(date_range[1]).date(),
+                    min_value=pd.to_datetime(date_range[0]).date(),
+                    max_value=pd.to_datetime(date_range[1]).date(),
+                    key="kw_end_date"
+                )
+            else:
+                kw_end_date = st.date_input("End Date", value=datetime.now().date(), key="kw_end_date")
+
+        with kw_filter_col3:
+            # Domain filter (optional)
+            if 'domain' in st.session_state.processed_data.columns:
+                domains = ["All Domains"] + sorted(st.session_state.processed_data['domain'].dropna().unique().tolist())
+                selected_domain = st.selectbox(
+                    "Domain Filter (Optional)",
+                    options=domains,
+                    index=0
+                )
+            else:
+                selected_domain = None
+
+        with kw_filter_col4:
+            top_kw_n = st.selectbox(
+                "Show Top N Domains",
+                options=[3, 5, 10, 20, 50, 100],
+                index=1,
+                key="top_kw_n"
+            )
+
+            # Apply filters button
+            apply_kw_button = st.button("Analyze Keyword", key="keyword_apply")
+
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        # Apply filters and generate keyword analysis
+        if selected_keyword != "All Keywords" and selected_keyword != "No keywords available":
+            df = st.session_state.processed_data.copy()
+
+            # Apply filters
+            df = apply_date_filter(df, kw_start_date, kw_end_date)
+            df = df[df['Keyword'] == selected_keyword]
+
+            if selected_domain and selected_domain != "All Domains":
+                df = df[df['domain'] == selected_domain]
+
+            if len(df) == 0:
+                st.warning(f"No data found for keyword '{selected_keyword}' with the selected filters.")
+            else:
+                # Available dates information
+                st.markdown(f"<h3>Available Dates for '{selected_keyword}'</h3>", unsafe_allow_html=True)
+
+                if 'date' in df.columns:
+                    dates = sorted(df['date'].dropna().unique())
+                    date_str = [d.strftime('%Y-%m-%d') if isinstance(d, datetime.date) else str(d).split(' ')[0] 
+                              for d in dates]
+
+                    date_text = ", ".join(date_str)
+                    st.info(f"Data available for dates: {date_text}")
+
+                # Create keyword analysis visualizations
+                kw_col1, kw_col2 = st.columns(2)
+
+                with kw_col1:
+                    # Position Distribution Chart
+                    st.markdown('<h3>Position Distribution</h3>', unsafe_allow_html=True)
+
+                    if 'Position' in df.columns:
+                        pos_dist = px.histogram(
+                            df, 
+                            x='Position',
+                            title=f'Position Distribution for "{selected_keyword}"',
+                            labels={'Position': 'Position', 'count': 'Count'},
+                            nbins=20,
+                            color_discrete_sequence=['#3366CC']
+                        )
+
+                        pos_dist.update_layout(
+                            xaxis_title="Position",
+                            yaxis_title="Count",
+                            bargap=0.1
+                        )
+
+                        st.plotly_chart(pos_dist, use_container_width=True)
+                    else:
+                        st.error("Position data not available")
+
+                with kw_col2:
+                    # Domain Performance Chart
+                    st.markdown('<h3>Domain Performance</h3>', unsafe_allow_html=True)
+
+                    if 'domain' in df.columns and 'Position' in df.columns:
+                        domain_positions = df.groupby('domain')['Position'].agg(['mean', 'min', 'max', 'count']).reset_index()
+                        domain_positions = domain_positions.sort_values('mean')
+
+                        domain_perf = px.bar(
+                            domain_positions.head(top_kw_n), 
+                            x='domain', 
+                            y='mean',
+                            error_y='count',
+                            title=f'Top {top_kw_n} Domains for "{selected_keyword}"',
+                            labels={'domain': 'Domain', 'mean': 'Average Position'},
+                            color='mean',
+                            color_continuous_scale='RdYlGn_r'
+                        )
+
+                        domain_perf.update_layout(
+                            xaxis_title="Domain",
+                            yaxis_title="Average Position",
+                            yaxis_autorange='reversed'  # Lower positions (better rankings) at the top
+                        )
+
+                        st.plotly_chart(domain_perf, use_container_width=True)
+                    else:
+                        st.error("Domain and Position data not available")
+
+                # Position Trend Over Time
+                st.markdown('<h3>Position Trend Over Time</h3>', unsafe_allow_html=True)
+
+                if 'date' in df.columns and 'Position' in df.columns and 'domain' in df.columns:
+                    # Get top domains for this keyword
+                    top_domains = domain_positions.head(top_kw_n)['domain'].tolist()
+
+                    # Filter data for these domains
+                    trend_data = df[df['domain'].isin(top_domains)]
+
+                    if not trend_data.empty:
+                        # Group by date and domain, calculate average position
+                        trend_daily = trend_data.groupby(['date', 'domain'])['Position'].mean().reset_index()
+
+                        # Create trend chart
+                        trend_chart = px.line(
+                            trend_daily,
+                            x='date',
+                            y='Position',
+                            color='domain',
+                            title=f'Position Trend Over Time for "{selected_keyword}"',
+                            labels={'date': 'Date', 'Position': 'Position', 'domain': 'Domain'}
+                        )
+
+                        trend_chart.update_layout(
+                            xaxis_title="Date",
+                            yaxis_title="Position",
+                            yaxis_autorange='reversed',  # Lower positions (better rankings) at the top
+                            legend_title="Domain"
+                        )
+
+                        st.plotly_chart(trend_chart, use_container_width=True)
+                    else:
+                        st.info("Not enough data to display trend over time.")
+                else:
+                    st.error("Required data for trend chart not available")
+
+                # Domain Performance Table
+                st.markdown('<h3>Domain Performance Details</h3>', unsafe_allow_html=True)
+
+                if 'domain' in df.columns and 'Position' in df.columns:
+                    # Round numeric columns to 2 decimal places
+                    for col in ['mean', 'min', 'max']:
+                        if col in domain_positions.columns:
+                            domain_positions[col] = domain_positions[col].round(2)
+
+                    # Rename columns for better display
+                    domain_positions = domain_positions.rename(columns={
+                        'mean': 'Average Position',
+                        'min': 'Best Position',
+                        'max': 'Worst Position',
+                        'count': 'Occurrences'
+                    })
+
+                    st.dataframe(domain_positions, use_container_width=True)
+                else:
+                    st.error("Domain and Position data not available")
+
+    # Tab 4: Domain Analysis
+    with tabs[3]:
+        st.markdown('<h2 class="section-header">Domain Analysis</h2>', unsafe_allow_html=True)
+
+        # Filters for domain analysis
+        st.markdown('<div class="filter-container">', unsafe_allow_html=True)
+        dom_filter_col1, dom_filter_col2, dom_filter_col3, dom_filter_col4 = st.columns([1, 1, 1, 1])
+
+        with dom_filter_col1:
+            # Domain input
+            if 'domain' in st.session_state.processed_data.columns:
+                domains = sorted(st.session_state.processed_data['domain'].dropna().unique().tolist())
+                selected_domain_analysis = st.selectbox(
+                    "Select Domain",
+                    options=domains,
+                    index=0 if domains else None
+                )
+            else:
+                selected_domain_analysis = st.text_input("Enter Domain", "example.com")
+
+        with dom_filter_col2:
+            # Date range filter
+            date_range = st.session_state.summary.get('date_range', ["N/A", "N/A"])
+
+            if date_range[0] != "N/A":
+                dom_start_date = st.date_input(
+                    "Start Date",
+                    value=pd.to_datetime(date_range[0]).date(),
+                    min_value=pd.to_datetime(date_range[0]).date(),
+                    max_value=pd.to_datetime(date_range[1]).date(),
+                    key="dom_start_date"
+                )
+            else:
+                dom_start_date = st.date_input("Start Date", value=datetime.now().date(), key="dom_start_date")
+
+            if date_range[1] != "N/A":
+                dom_end_date = st.date_input(
+                    "End Date",
+                    value=pd.to_datetime(date_range[1]).date(),
+                    min_value=pd.to_datetime(date_range[0]).date(),
+                    max_value=pd.to_datetime(date_range[1]).date(),
+                    key="dom_end_date"
+                )
+            else:
+                dom_end_date = st.date_input("End Date", value=datetime.now().date(), key="dom_end_date")
+
+        with dom_filter_col3:
+            # Position range filter
+            dom_pos_col1, dom_pos_col2 = st.columns(2)
+            with dom_pos_col1:
+                dom_position_min = st.number_input("Min Position", min_value=1, value=1, key="dom_pos_min")
+            with dom_pos_col2:
+                dom_position_max = st.number_input("Max Position", min_value=1, value=100, key="dom_pos_max")
+
+        with dom_filter_col4:
+            top_dom_n = st.selectbox(
+                "Show Top N Keywords",
+                options=[3, 5, 10, 20, 50, 100],
+                index=1,
+                key="top_dom_n"
+            )
+
+            # Apply filters button
+            apply_dom_button = st.button("Analyze Domain", key="domain_apply")
+
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        # Apply filters and generate domain analysis
+        if selected_domain_analysis:
+            df = st.session_state.processed_data.copy()
+
+            # Apply filters
+            df = apply_date_filter(df, dom_start_date, dom_end_date)
+            df = apply_position_filter(df, dom_position_min, dom_position_max)
+
+            # Filter by domain
+            if 'domain' in df.columns:
+                df = df[df['domain'] == selected_domain_analysis]
+            else:
+                st.error("Domain data not available in the dataset")
+                return
+
+            if len(df) == 0:
+                st.warning(f"No data found for domain '{selected_domain_analysis}' with the selected filters.")
+            else:
+                # Create domain analysis visualizations
+                dom_col1, dom_col2 = st.columns(2)
+
+                with dom_col1:
+                    # Keyword Performance Chart
+                    st.markdown('<h3>Keyword Performance</h3>', unsafe_allow_html=True)
+
+                    if 'Keyword' in df.columns and 'Position' in df.columns:
+                        keyword_perf = df.groupby('Keyword')['Position'].agg(['mean', 'min', 'max', 'count']).reset_index()
+                        keyword_perf = keyword_perf.sort_values('mean')
+
+                        keyword_chart = px.bar(
+                            keyword_perf.head(top_dom_n), 
+                            x='Keyword', 
+                            y='mean',
+                            title=f'Top {top_dom_n} Keywords for "{selected_domain_analysis}"',
+                            labels={'Keyword': 'Keyword', 'mean': 'Average Position'},
+                            color='mean',
+                            color_continuous_scale='RdYlGn_r'
+                        )
+
+                        keyword_chart.update_layout(
                             xaxis_title="Keyword",
                             yaxis_title="Average Position",
                             yaxis_autorange='reversed',  # Lower positions (better rankings) at the top
                             xaxis_tickangle=-45  # Rotate x-axis labels for better readability
                         )
 
-                        fig.update_traces(texttemplate='%{text} entries', textposition='outside')
+                        st.plotly_chart(keyword_chart, use_container_width=True)
+                    else:
+                        st.error("Keyword and Position data not available")
 
-                        st.plotly_chart(fig, use_container_width=True)
+                with dom_col2:
+                    # Position Distribution Chart
+                    st.markdown('<h3>Position Distribution</h3>', unsafe_allow_html=True)
 
-                        # Table
-                        st.subheader("Keyword Rankings")
-                        st.dataframe(keyword_perf.rename(columns={
-                            'mean': 'Avg Position',
-                            'min': 'Best Position',
-                            'max': 'Worst Position',
-                            'count': 'Count'
-                        }), use_container_width=True)
-
-                        # Position distribution
-                        st.subheader("Position Distribution")
-
-                        fig = px.histogram(
-                            domain_df,
+                    if 'Position' in df.columns:
+                        pos_dist = px.histogram(
+                            df, 
                             x='Position',
+                            title=f'Position Distribution for "{selected_domain_analysis}"',
+                            labels={'Position': 'Position', 'count': 'Count'},
                             nbins=20,
-                            title=f'Position Distribution for "{domain_input}"',
-                            color_discrete_sequence=['#3366CC'],
-                            opacity=0.8
+                            color_discrete_sequence=['#3366CC']
                         )
 
-                        fig.update_layout(
+                        pos_dist.update_layout(
                             xaxis_title="Position",
                             yaxis_title="Count",
                             bargap=0.1
                         )
 
-                        st.plotly_chart(fig, use_container_width=True)
-
-                        # Trend over time chart (if we have date data)
-                        if 'date' in domain_df.columns and len(keyword_perf) > 0:
-                            st.subheader("Position Trend Over Time")
-
-                            # Get top keywords
-                            top_keywords = keyword_perf.head(top_rank)['Keyword'].tolist()
-
-                            # Filter data for these keywords
-                            trend_data = domain_df[domain_df['Keyword'].isin(top_keywords)]
-
-                            if not trend_data.empty:
-                                # Group by date and keyword, calculate average position
-                                trend_daily = trend_data.groupby(['date', 'Keyword'])['Position'].mean().reset_index()
-
-                                # Create trend chart
-                                fig = px.line(
-                                    trend_daily,
-                                    x='date',
-                                    y='Position',
-                                    color='Keyword',
-                                    title=f'Position Trend Over Time for "{domain_input}"',
-                                    labels={'date': 'Date', 'Position': 'Position', 'Keyword': 'Keyword'},
-                                    markers=True
-                                )
-
-                                fig.update_layout(
-                                    xaxis_title="Date",
-                                    yaxis_title="Position",
-                                    yaxis_autorange='reversed',  # Lower positions (better rankings) at the top
-                                    legend_title="Keyword"
-                                )
-                                st.plotly_chart(fig, use_container_width=True)
+                        st.plotly_chart(pos_dist, use_container_width=True)
                     else:
-                        st.info("No keyword performance data available for this domain")
+                        st.error("Position data not available")
+
+                # Position Trend Over Time
+                st.markdown('<h3>Position Trend Over Time</h3>', unsafe_allow_html=True)
+
+                if 'date' in df.columns and 'Position' in df.columns and 'Keyword' in df.columns:
+                    # Get top keywords for this domain
+                    top_keywords = keyword_perf.head(top_dom_n)['Keyword'].tolist()
+
+                    # Filter data for these keywords
+                    trend_data = df[df['Keyword'].isin(top_keywords)]
+
+                    if not trend_data.empty:
+                        # Group by date and keyword, calculate average position
+                        trend_daily = trend_data.groupby(['date', 'Keyword'])['Position'].mean().reset_index()
+
+                        # Create trend chart
+                        trend_chart = px.line(
+                            trend_daily,
+                            x='date',
+                            y='Position',
+                            color='Keyword',
+                            title=f'Position Trend Over Time for "{selected_domain_analysis}"',
+                            labels={'date': 'Date', 'Position': 'Position', 'Keyword': 'Keyword'}
+                        )
+
+                        trend_chart.update_layout(
+                            xaxis_title="Date",
+                            yaxis_title="Position",
+                            yaxis_autorange='reversed',  # Lower positions (better rankings) at the top
+                            legend_title="Keyword"
+                        )
+
+                        st.plotly_chart(trend_chart, use_container_width=True)
+                    else:
+                        st.info("Not enough data to display trend over time.")
                 else:
-                    st.warning("Required data columns missing or no data found for this domain")
+                    st.error("Required data for trend chart not available")
 
-    # URL Comparison Tab
-    with tabs[3]:
-        st.header("URL Comparison")
+                # Keyword Performance Table
+                st.markdown('<h3>Keyword Performance Details</h3>', unsafe_allow_html=True)
 
-        # URL selector
-        if 'Results' in df.columns:
-            urls = sorted(df['Results'].unique().tolist())
-            selected_urls = st.multiselect("Select URLs to Compare", urls)
+                if 'Keyword' in df.columns and 'Position' in df.columns:
+                    # Round numeric columns to 2 decimal places
+                    for col in ['mean', 'min', 'max']:
+                        if col in keyword_perf.columns:
+                            keyword_perf[col] = keyword_perf[col].round(2)
 
-            # Date filter
-            url_compare_date_range = st.date_input(
-                "Date Range for URL Comparison",
-                value=(datetime.datetime.now() - datetime.timedelta(days=30), datetime.datetime.now()),
-                format="YYYY-MM-DD",
-                key="url_compare_date_range"
-            )
+                    # Rename columns for better display
+                    keyword_perf = keyword_perf.rename(columns={
+                        'mean': 'Average Position',
+                        'min': 'Best Position',
+                        'max': 'Worst Position',
+                        'count': 'Occurrences'
+                    })
 
-            compare_urls = st.button("Compare URLs")
+                    st.dataframe(keyword_perf, use_container_width=True)
+                else:
+                    st.error("Keyword and Position data not available")
 
-            if selected_urls and compare_urls:
-                # Filter data for selected URLs
+    # Tab 5: URL Comparison
+    with tabs[4]:
+        st.markdown('<h2 class="section-header">URL Comparison</h2>', unsafe_allow_html=True)
+
+        # Filters for URL comparison
+        st.markdown('<div class="filter-container">', unsafe_allow_html=True)
+        url_filter_col1, url_filter_col2, url_filter_col3 = st.columns([2, 1, 1])
+
+        with url_filter_col1:
+            # URL selection
+            if st.session_state.urls:
+                selected_urls = st.multiselect(
+                    "Select URLs to Compare",
+                    options=st.session_state.urls,
+                    default=st.session_state.urls[:2] if len(st.session_state.urls) >= 2 else st.session_state.urls[:1]
+                )
+            else:
+                selected_urls = []
+                st.error("No URLs available in the dataset")
+
+        with url_filter_col2:
+            # Date range filter
+            date_range = st.session_state.summary.get('date_range', ["N/A", "N/A"])
+
+            if date_range[0] != "N/A":
+                url_start_date = st.date_input(
+                    "Start Date",
+                    value=pd.to_datetime(date_range[0]).date(),
+                    min_value=pd.to_datetime(date_range[0]).date(),
+                    max_value=pd.to_datetime(date_range[1]).date(),
+                    key="url_start_date"
+                )
+            else:
+                url_start_date = st.date_input("Start Date", value=datetime.now().date(), key="url_start_date")
+
+            if date_range[1] != "N/A":
+                url_end_date = st.date_input(
+                    "End Date",
+                    value=pd.to_datetime(date_range[1]).date(),
+                    min_value=pd.to_datetime(date_range[0]).date(),
+                    max_value=pd.to_datetime(date_range[1]).date(),
+                    key="url_end_date"
+                )
+            else:
+                url_end_date = st.date_input("End Date", value=datetime.now().date(), key="url_end_date")
+
+        with url_filter_col3:
+            # Apply comparison button
+            st.write("")  # Adding space for alignment
+            st.write("")  # Adding space for alignment
+            apply_url_button = st.button("Compare URLs", key="url_compare")
+
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        # Apply filters and generate URL comparison
+        if selected_urls and len(selected_urls) > 0:
+            df = st.session_state.processed_data.copy()
+
+            # Apply date range filter
+            df = apply_date_filter(df, url_start_date, url_end_date)
+
+            # Filter by URLs
+            if 'Results' in df.columns:
                 url_df = df[df['Results'].isin(selected_urls)]
+            else:
+                st.error("URL data not available in the dataset")
+                return
 
-                # Apply date filter if selected
-                if len(url_compare_date_range) == 2:
-                    date_filter = {'start': url_compare_date_range[0], 'end': url_compare_date_range[1]}
-                    url_df = apply_date_filter(url_df, date_filter)
+            if len(url_df) == 0:
+                st.warning("No data found for the selected URLs with the given filters.")
+            else:
+                # Prepare URL performance data
+                url_data = []
+                for url in selected_urls:
+                    url_subset = url_df[url_df['Results'] == url]
 
-                if url_df.empty:
-                    st.warning("No data found for the selected URLs with the current filters")
-                else:
-                    # Prepare URL performance data
-                    url_data = []
-                    for url in selected_urls:
-                        url_subset = url_df[url_df['Results'] == url]
+                    if not url_subset.empty and 'Position' in url_subset.columns:
+                        url_data.append({
+                            'url': url,
+                            'avg_position': url_subset['Position'].mean(),
+                            'best_position': url_subset['Position'].min(),
+                            'worst_position': url_subset['Position'].max(),
+                            'keywords_count': url_subset['Keyword'].nunique() if 'Keyword' in url_subset.columns else 0
+                        })
 
-                        if not url_subset.empty and 'Position' in url_subset.columns:
-                            url_data.append({
-                                'url': url,
-                                'domain': get_domain(url),
-                                'avg_position': url_subset['Position'].mean(),
-                                'best_position': url_subset['Position'].min(),
-                                'worst_position': url_subset['Position'].max(),
-                                'keywords_count': url_subset['Keyword'].nunique() if 'Keyword' in url_subset.columns else 0,
-                                'data_points': len(url_subset)
-                            })
+                # Sort by average position
+                url_data = sorted(url_data, key=lambda x: x['avg_position'])
 
-                    # Sort by average position
-                    url_data = sorted(url_data, key=lambda x: x['avg_position'])
-                    url_df_summary = pd.DataFrame(url_data)
+                # Create URL comparison visualizations
+                url_col1, url_col2 = st.columns(2)
 
-                    # URL comparison chart
-                    if not url_df_summary.empty:
-                        st.subheader("URL Position Comparison")
+                with url_col1:
+                    # URL Comparison Chart
+                    st.markdown('<h3>URL Position Comparison</h3>', unsafe_allow_html=True)
 
-                        fig = px.bar(
-                            url_df_summary,
+                    if url_data:
+                        url_comparison_df = pd.DataFrame(url_data)
+
+                        url_comparison_chart = px.bar(
+                            url_comparison_df,
                             x='url',
                             y='avg_position',
                             error_y=[(d['worst_position'] - d['avg_position']) for d in url_data],
                             title='URL Position Comparison',
                             labels={'url': 'URL', 'avg_position': 'Average Position'},
                             color='avg_position',
-                            color_continuous_scale='RdYlGn_r',
-                            text='keywords_count'
+                            color_continuous_scale='RdYlGn_r'
                         )
 
-                        fig.update_layout(
+                        url_comparison_chart.update_layout(
                             xaxis_title="URL",
                             yaxis_title="Average Position",
                             yaxis_autorange='reversed',  # Lower positions (better rankings) at the top
                             xaxis_tickangle=-45  # Rotate x-axis labels for better readability
                         )
 
-                        fig.update_traces(texttemplate='%{text} keywords', textposition='outside')
+                        st.plotly_chart(url_comparison_chart, use_container_width=True)
+                    else:
+                        st.error("Not enough data for URL comparison chart")
 
-                        st.plotly_chart(fig, use_container_width=True)
+                with url_col2:
+                    # Keyword Performance by URL Chart
+                    st.markdown('<h3>URL Performance by Keyword</h3>', unsafe_allow_html=True)
 
-                        # URL performance by keyword chart
-                        if 'Keyword' in url_df.columns:
-                            keyword_comparison_data = []
+                    if 'Keyword' in url_df.columns and 'Position' in url_df.columns:
+                        # Get top 5 keywords by frequency across these URLs
+                        top_keywords = url_df['Keyword'].value_counts().head(5).index.tolist()
 
-                            # Get top keywords by frequency across these URLs
-                            top_keywords = url_df['Keyword'].value_counts().head(5).index.tolist()
+                        # For each keyword, get position by URL
+                        keyword_comparison_data = []
 
-                            # For each keyword, get position by URL
-                            for keyword in top_keywords:
-                                keyword_data = url_df[url_df['Keyword'] == keyword]
+                        for keyword in top_keywords:
+                            keyword_data = url_df[url_df['Keyword'] == keyword]
 
-                                for url in selected_urls:
-                                    url_keyword_data = keyword_data[keyword_data['Results'] == url]
+                            for url in selected_urls:
+                                url_keyword_data = keyword_data[keyword_data['Results'] == url]
 
-                                    if not url_keyword_data.empty:
-                                        keyword_comparison_data.append({
-                                            'keyword': keyword,
-                                            'url': url,
-                                            'position': url_keyword_data['Position'].mean(),
-                                            'count': len(url_keyword_data)
-                                        })
+                                if not url_keyword_data.empty:
+                                    keyword_comparison_data.append({
+                                        'keyword': keyword,
+                                        'url': url,
+                                        'position': url_keyword_data['Position'].mean()
+                                    })
 
-                            if keyword_comparison_data:
-                                st.subheader("URL Performance by Keyword")
+                        if keyword_comparison_data:
+                            keyword_comparison_df = pd.DataFrame(keyword_comparison_data)
 
-                                keyword_comparison_df = pd.DataFrame(keyword_comparison_data)
+                            keyword_comparison_chart = px.bar(
+                                keyword_comparison_df,
+                                x='keyword',
+                                y='position',
+                                color='url',
+                                barmode='group',
+                                title='URL Performance by Keyword',
+                                labels={'keyword': 'Keyword', 'position': 'Average Position', 'url': 'URL'}
+                            )
+
+                            keyword_comparison_chart.update_layout(
+                                xaxis_title="Keyword",
+                                yaxis_title="Average Position",
+                                yaxis_autorange='reversed',  # Lower positions (better rankings) at the top
+                                legend_title="URL"
+                            )
+
+                            st.plotly_chart(keyword_comparison_chart, use_container_width=True)
+                        else:
+                            st.info("Not enough keyword data for the selected URLs.")
+                    else:
+                        st.error("Keyword and Position data not available")
+
+                # Position Trend Over Time
+                st.markdown('<h3>Position Trend Over Time</h3>', unsafe_allow_html=True)
+
+                if 'date' in url_df.columns and len(selected_urls) > 0:
+                    # For each URL, get positions over time
+                    trend_data = []
+                    for url in selected_urls:
+                        url_time_data = url_df[url_df['Results'] == url]
+
+                        if not url_time_data.empty and 'date' in url_time_data.columns:
+                            # Group by date and calculate average position
+                            url_daily = url_time_data.groupby('date')['Position'].mean().reset_index()
+                            url_daily['url'] = url
+                            trend_data.append(url_daily)
+
+                    if trend_data:
+                        # Combine all URL data
+                        all_trend_data = pd.concat(trend_data)
+
+                        # Create trend chart
+                        time_comparison_chart = px.line(
+                            all_trend_data,
+                            x='date',
+                            y='Position',
+                            color='url',
+                            title='URL Position Trend Over Time',
+                            labels={'date': 'Date', 'Position': 'Position', 'url': 'URL'}
+                        )
+
+                        time_comparison_chart.update_layout(
+                            xaxis_title="Date",
+                            yaxis_title="Position",
+                            yaxis_autorange='reversed',  # Lower positions (better rankings) at the top
+                            legend_title="URL"
+                        )
+
+                        st.plotly_chart(time_comparison_chart, use_container_width=True)
+                    else:
+                        st.info("Not enough time data to display trend.")
+                else:
+                    st.error("Date data not available for trend chart")
+
+                # URL Data Table
+                st.markdown('<h3>URL Performance Details</h3>', unsafe_allow_html=True)
+
+                if url_data:
+                    # Create a DataFrame from the URL data
+                    url_table_df = pd.DataFrame(url_data)
+
+                    # Round numeric columns to 2 decimal places
+                    for col in ['avg_position', 'best_position', 'worst_position']:
+                        if col in url_table_df.columns:
+                            url_table_df[col] = url_table_df[col].round(2)
+
+                    # Rename columns for better display
+                    url_table_df = url_table_df.rename(columns={
+                        'url': 'URL',
+                        'avg_position': 'Average Position',
+                        'best_position': 'Best Position',
+                        'worst_position': 'Worst Position',
+                        'keywords_count': 'Keywords Count'
+                    })
+
+                    st.dataframe(url_table_df, use_container_width=True)
+                else:
+                    st.error("URL performance data not available")
+
+    # Tab 6: Time Comparison
+    with tabs[5]:
+        st.markdown('<h2 class="section-header">Time Comparison</h2>', unsafe_allow_html=True)
+
+        # Filters for time comparison
+        st.markdown('<div class="filter-container">', unsafe_allow_html=True)
+        time_filter_col1, time_filter_col2, time_filter_col3, time_filter_col4 = st.columns([1, 1, 1, 1])
+
+        with time_filter_col1:
+            # Select keyword
+            time_keyword = st.selectbox(
+                "Select Keyword",
+                options=st.session_state.keywords if len(st.session_state.keywords) > 1 else ["No keywords available"],
+                index=1 if len(st.session_state.keywords) > 1 else 0,
+                key="time_keyword"
+            )
+
+        # Initialize dates when a keyword is selected
+        keyword_dates = []
+        if 'processed_data' in st.session_state and st.session_state.processed_data is not None and time_keyword != "All Keywords" and time_keyword != "No keywords available":
+            df = st.session_state.processed_data.copy()
+            keyword_df = df[df['Keyword'] == time_keyword]
+
+            if 'date' in keyword_df.columns:
+                dates = sorted(keyword_df['date'].dropna().unique())
+                keyword_dates = [d.strftime('%Y-%m-%d') if isinstance(d, datetime.date) else str(d).split(' ')[0] 
+                                for d in dates]
+
+        with time_filter_col2:
+            # Start date selection
+            if keyword_dates:
+                time_start_date = st.selectbox(
+                    "Start Date",
+                    options=keyword_dates,
+                    index=0,
+                    key="time_start_date"
+                )
+            else:
+                time_start_date = st.selectbox(
+                    "Start Date",
+                    options=["Select a keyword first"],
+                    index=0,
+                    disabled=True,
+                    key="time_start_date_disabled"
+                )
+
+        with time_filter_col3:
+            # End date selection
+            if keyword_dates and len(keyword_dates) > 1:
+                time_end_date = st.selectbox(
+                    "End Date",
+                    options=keyword_dates,
+                    index=len(keyword_dates)-1,
+                    key="time_end_date"
+                )
+            else:
+                time_end_date = st.selectbox(
+                    "End Date",
+                    options=["Select a keyword first"],
+                    index=0,
+                    disabled=True,
+                    key="time_end_date_disabled"
+                )
+
+        with time_filter_col4:
+            # Apply comparison button
+            st.write("")  # Adding space for alignment
+            st.write("")  # Adding space for alignment
+            apply_time_button = st.button("Compare Over Time", key="time_compare")
+
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        # Apply filters and generate time comparison
+        if (time_keyword != "All Keywords" and time_keyword != "No keywords available" and 
+            time_start_date != "Select a keyword first" and time_end_date != "Select a keyword first"):
+
+            df = st.session_state.processed_data.copy()
+
+            # Filter by keyword
+            df = df[df['Keyword'] == time_keyword]
+
+            # Convert dates
+            try:
+                start_date_dt = pd.to_datetime(time_start_date).date()
+                end_date_dt = pd.to_datetime(time_end_date).date()
+
+                # Filter by dates
+                if 'date' in df.columns:
+                    start_data = df[df['date'] == start_date_dt].copy()
+                    end_data = df[df['date'] == end_date_dt].copy()
+                else:
+                    st.error("Date data not available in the dataset")
+                    return
+
+                if len(start_data) == 0 and len(end_data) == 0:
+                    st.warning(f"No data found for keyword '{time_keyword}' on the selected dates.")
+                else:
+                    # Sort data by position
+                    if not start_data.empty:
+                        start_data = start_data.sort_values(by='Position', ascending=True)
+                    if not end_data.empty:
+                        end_data = end_data.sort_values(by='Position', ascending=True)
+
+                    # Display summary
+                    st.markdown('<div class="filter-container">', unsafe_allow_html=True)
+                    summary_col1, summary_col2, summary_col3 = st.columns(3)
+
+                    with summary_col1:
+                        st.markdown(f"<b>Keyword:</b> {time_keyword}", unsafe_allow_html=True)
+
+                    with summary_col2:
+                        start_count = len(start_data) if not start_data.empty else 0
+                        st.markdown(f"<b>Start Date:</b> {time_start_date} ({start_count} URLs found)", unsafe_allow_html=True)
+
+                    with summary_col3:
+                        end_count = len(end_data) if not end_data.empty else 0
+                        st.markdown(f"<b>End Date:</b> {time_end_date} ({end_count} URLs found)", unsafe_allow_html=True)
+
+                    st.markdown('</div>', unsafe_allow_html=True)
+
+                    # Create data for comparing positions
+                    start_urls = []
+                    if not start_data.empty:
+                        for _, row in start_data.iterrows():
+                            url = row['Results']
+                            position = row['Position']
+
+                            if pd.notna(url) and pd.notna(position):
+                                domain = row['domain'] if 'domain' in row else get_domain(url)
+
+                                start_urls.append({
+                                    'url': url,
+                                    'position': int(position) if isinstance(position, (int, float)) else position,
+                                    'domain': domain
+                                })
+
+                    end_urls = []
+                    if not end_data.empty:
+                        for _, row in end_data.iterrows():
+                            url = row['Results']
+                            position = row['Position']
+
+                            if pd.notna(url) and pd.notna(position):
+                                domain = row['domain'] if 'domain' in row else get_domain(url)
+
+                                end_urls.append({
+                                    'url': url,
+                                    'position': int(position) if isinstance(position, (int, float)) else position,
+                                    'domain': domain
+                                })
+
+                    # Create start/end position maps for position change calculation
+                    start_positions = {item['url']: item['position'] for item in start_urls}
+                    end_positions = {item['url']: item['position'] for item in end_urls}
+
+                    # Add position change information
+                    for url_data in start_urls:
+                        if url_data['url'] in end_positions:
+                            change = end_positions[url_data['url']] - url_data['position']
+                            if change < 0:
+                                url_data['position_change_text'] = f"↑ {abs(change)} (improved)"
+                                url_data['position_change'] = change
+                            elif change > 0:
+                                url_data['position_change_text'] = f"↓ {change} (declined)"
+                                url_data['position_change'] = change
+                            else:
+                                url_data['position_change_text'] = "No change"
+                                url_data['position_change'] = 0
+                        else:
+                            url_data['position_change_text'] = "Not in end data"
+                            url_data['position_change'] = None
+
+                    for url_data in end_urls:
+                        if url_data['url'] in start_positions:
+                            change = url_data['position'] - start_positions[url_data['url']]
+                            if change < 0:
+                                url_data['position_change_text'] = f"↑ {abs(change)} (improved)"
+                                url_data['position_change'] = change
+                            elif change > 0:
+                                url_data['position_change_text'] = f"↓ {change} (declined)"
+                                url_data['position_change'] = change
+                            else:
+                                url_data['position_change_text'] = "No change"
+                                url_data['position_change'] = 0
+                        else:
+                            url_data['position_change_text'] = "New"
+                            url_data['position_change'] = None
+
+                    # Create position changes analysis
+                    all_urls = set()
+                    for url_data in start_urls:
+                        all_urls.add(url_data['url'])
+
+                    for url_data in end_urls:
+                        all_urls.add(url_data['url'])
+
+                    position_changes = []
+                    for url in all_urls:
+                        start_pos = start_positions.get(url)
+                        end_pos = end_positions.get(url)
+
+                        if start_pos is not None or end_pos is not None:
+                            change_data = {
+                                'url': url,
+                                'domain': get_domain(url),
+                                'start_position': start_pos,
+                                'end_position': end_pos
+                            }
+
+                            # Calculate position change
+                            if start_pos is not None and end_pos is not None:
+                                change = end_pos - start_pos
+                                if change < 0:
+                                    change_data['change_text'] = f"↑ {abs(change)} (improved)"
+                                    change_data['status'] = 'improved'
+                                elif change > 0:
+                                    change_data['change_text'] = f"↓ {change} (declined)"
+                                    change_data['status'] = 'declined'
+                                else:
+                                    change_data['change_text'] = "No change"
+                                    change_data['status'] = 'unchanged'
+                                change_data['change'] = change
+                            else:
+                                change_data['change'] = None
+                                if start_pos is None:
+                                    change_data['change_text'] = "New"
+                                    change_data['status'] = 'new'
+                                else:
+                                    change_data['change_text'] = "Dropped"
+                                    change_data['status'] = 'dropped'
+
+                            position_changes.append(change_data)
+
+                    # Sort by absolute change value (biggest changes first)
+                    position_changes = sorted(position_changes, 
+                        key=lambda x: (
+                            # Sort order: first by status (changed, then new/dropped, then unchanged)
+                            0 if x['status'] in ('improved', 'declined') else (1 if x['status'] in ('new', 'dropped') else 2),
+                            # Then by absolute change value (descending)
+                            abs(x['change']) if x['change'] is not None else 0
+                        ), 
+                        reverse=True
+                    )
+
+                    # Display data tables
+                    col1, col2 = st.columns(2)
+
+                    with col1:
+                        st.markdown('<h3>Start Date URLs</h3>', unsafe_allow_html=True)
+                        st.markdown('<p>Sorted by position (best positions first)</p>', unsafe_allow_html=True)
+
+                        if start_urls:
+                            start_urls_df = pd.DataFrame(start_urls)
+                            # Streamlit doesn't support conditional formatting, so we'll just display the DataFrame
+                            st.dataframe(start_urls_df[['position', 'url', 'domain', 'position_change_text']], use_container_width=True)
+                        else:
+                            st.info("No data available for the start date.")
+
+                    with col2:
+                        st.markdown('<h3>End Date URLs</h3>', unsafe_allow_html=True)
+                        st.markdown('<p>Sorted by position (best positions first)</p>', unsafe_allow_html=True)
+
+                        if end_urls:
+                            end_urls_df = pd.DataFrame(end_urls)
+                            st.dataframe(end_urls_df[['position', 'url', 'domain', 'position_change_text']], use_container_width=True)
+                        else:
+                            st.info("No data available for the end date.")
+
+                    # Position Changes Analysis
+                    st.markdown('<h3>Position Changes Analysis</h3>', unsafe_allow_html=True)
+                    st.markdown('<p>All URLs with their position changes</p>', unsafe_allow_html=True)
+
+                    if position_changes:
+                        position_changes_df = pd.DataFrame(position_changes)
+                        st.dataframe(position_changes_df[['url', 'domain', 'start_position', 'end_position', 'change_text']], use_container_width=True)
+
+                        # Create visualization of position changes
+                        pos_changes_viz = []
+                        for change_data in position_changes:
+                            if change_data['start_position'] is not None and change_data['end_position'] is not None:
+                                pos_changes_viz.append({
+                                    'domain': change_data['domain'],
+                                    'change': change_data['change'],
+                                    'status': change_data['status']
+                                })
+
+                        if pos_changes_viz:
+                            pos_changes_df = pd.DataFrame(pos_changes_viz)
+
+                            # Filter out unchanged positions for clarity
+                            pos_changes_df = pos_changes_df[pos_changes_df['status'].isin(['improved', 'declined'])]
+
+                            if not pos_changes_df.empty:
+                                # Create color mapping for improved/declined
+                                status_colors = {
+                                    'improved': '#4CAF50',  # Green
+                                    'declined': '#F44336'   # Red
+                                }
+
+                                # Sort by absolute change
+                                pos_changes_df = pos_changes_df.sort_values('change', key=abs, ascending=False)
 
                                 fig = px.bar(
-                                    keyword_comparison_df,
-                                    x='keyword',
-                                    y='position',
-                                    color='url',
-                                    barmode='group',
-                                    title='URL Performance by Keyword',
-                                    labels={'keyword': 'Keyword', 'position': 'Average Position', 'url': 'URL'},
-                                    text='count'
+                                    pos_changes_df,
+                                    x='domain',
+                                    y='change',
+                                    color='status',
+                                    title='Position Changes by Domain',
+                                    labels={'domain': 'Domain', 'change': 'Position Change'},
+                                    color_discrete_map=status_colors
                                 )
 
                                 fig.update_layout(
-                                    xaxis_title="Keyword",
-                                    yaxis_title="Average Position",
-                                    yaxis_autorange='reversed',  # Lower positions (better rankings) at the top
-                                    legend_title="URL"
+                                    xaxis_title="Domain",
+                                    yaxis_title="Position Change (negative = improved, positive = declined)",
+                                    xaxis_tickangle=-45
                                 )
-
-                                fig.update_traces(texttemplate='%{text} entries', textposition='outside')
 
                                 st.plotly_chart(fig, use_container_width=True)
-
-                        # URL position trend over time
-                        if 'date' in url_df.columns:
-                            st.subheader("URL Position Trend Over Time")
-
-                            # For each URL, get positions over time
-                            trend_data = []
-                            for url in selected_urls:
-                                url_time_data = url_df[url_df['Results'] == url]
-
-                                if not url_time_data.empty and 'date' in url_time_data.columns:
-                                    # Group by date and calculate average position
-                                    url_daily = url_time_data.groupby('date')['Position'].mean().reset_index()
-                                    url_daily['url'] = url
-                                    trend_data.append(url_daily)
-
-                            if trend_data:
-                                # Combine all URL data
-                                all_trend_data = pd.concat(trend_data)
-
-                                # Create trend chart
-                                fig = px.line(
-                                    all_trend_data,
-                                    x='date',
-                                    y='Position',
-                                    color='url',
-                                    title='URL Position Trend Over Time',
-                                    labels={'date': 'Date', 'Position': 'Position', 'url': 'URL'},
-                                    markers=True
-                                )
-
-                                fig.update_layout(
-                                    xaxis_title="Date",
-                                    yaxis_title="Position",
-                                    yaxis_autorange='reversed',  # Lower positions (better rankings) at the top
-                                    legend_title="URL"
-                                )
-                                st.plotly_chart(fig, use_container_width=True)
-
-                        # URL comparison table
-                        st.subheader("URL Comparison Data")
-                        st.dataframe(pd.DataFrame(url_data).rename(columns={
-                            'url': 'URL',
-                            'domain': 'Domain',
-                            'avg_position': 'Avg Position',
-                            'best_position': 'Best Position',
-                            'worst_position': 'Worst Position',
-                            'keywords_count': 'Keywords Count',
-                            'data_points': 'Data Points'
-                        }), use_container_width=True)
-            else:
-                st.info("Please select URLs to compare and click 'Compare URLs'")
-        else:
-            st.warning("URL column not found in data")
-
-    # Time Comparison Tab
-    with tabs[4]:
-        st.header("Time Comparison")
-        
-        # Keyword selector
-        if 'Keyword' in df.columns:
-            # Controls layout
-            col1, col2, col3 = st.columns(3)
-            
-            with col1:
-                keywords = sorted(df['Keyword'].unique().tolist())
-                time_compare_keyword = st.selectbox("Select Keyword", 
-                                                 ["-- Select a keyword --"] + keywords, 
-                                                 key="time_comparison_keyword")
-            
-            # Get available dates for the selected keyword
-            if time_compare_keyword != "-- Select a keyword --":
-                keyword_df = df[df['Keyword'] == time_compare_keyword]
-                
-                if not keyword_df.empty:
-                    # Extract dates from either 'date' or 'Time' column
-                    date_column = 'date' if 'date' in keyword_df.columns else 'Time' if 'Time' in keyword_df.columns else None
-                    
-                    if date_column:
-                        # Create a list of available dates
-                        available_dates = keyword_df[date_column].dropna().unique()
-                        
-                        # Format dates for display in selectbox
-                        date_strings = []
-                        for d in available_dates:
-                            try:
-                                if isinstance(d, datetime.datetime) or isinstance(d, datetime.date):
-                                    date_strings.append(d.strftime('%Y-%m-%d'))
-                                elif isinstance(d, str):
-                                    # Try to parse string as date
-                                    date_strings.append(pd.to_datetime(d).strftime('%Y-%m-%d'))
-                                else:
-                                    date_strings.append(str(d))
-                            except:
-                                # If can't format, use string representation
-                                date_strings.append(str(d))
-                        
-                        date_strings = sorted(list(set(date_strings)))  # Remove duplicates and sort
-                        
-                        # Show a debug option to help with date issues
-                        show_debug = st.checkbox("Debug date information")
-                        if show_debug:
-                            st.write("Date column information:")
-                            st.write(f"Using column: {date_column}")
-                            st.write(f"Found {len(available_dates)} unique dates")
-                            st.write("Sample dates:", list(available_dates)[:5])
-                            st.write("Formatted dates:", date_strings[:5])
-                        
-                        if date_strings:
-                            # Date selectors
-                            with col2:
-                                start_date = st.selectbox("Start Date", 
-                                                       ["-- Select start date --"] + date_strings,
-                                                       key="time_comparison_start_date")
-                            
-                            with col3:
-                                end_date = st.selectbox("End Date", 
-                                                     ["-- Select end date --"] + date_strings,
-                                                     key="time_comparison_end_date")
-                            
-                            # Compare button
-                            compare_time = st.button("Compare Over Time")
-                            
-                            if start_date != "-- Select start date --" and end_date != "-- Select end date --" and compare_time:
-                                # Use flexible date matching
-                                # Filter by matching the string format of dates
-                                start_data = keyword_df[keyword_df[date_column].astype(str).str.startswith(start_date.split(' ')[0])].copy()
-                                end_data = keyword_df[keyword_df[date_column].astype(str).str.startswith(end_date.split(' ')[0])].copy()
-                                
-                                # Debug info
-                                if show_debug:
-                                    st.write(f"Filtering for start date '{start_date}' found {len(start_data)} rows")
-                                    st.write(f"Filtering for end date '{end_date}' found {len(end_data)} rows")
-                                
-                                # Check if data is available for both dates
-                                if start_data.empty or end_data.empty:
-                                    st.warning(f"No data found for dates: {start_date} / {end_date}")
-                                    
-                                    # Offer suggestions
-                                    st.info("Available dates format might be different. Try using the Debug checkbox above to see date formats in your data.")
-                                else:
-                                    # Show the comparison summary
-                                    st.subheader("Comparison Summary")
-                                    
-                                    info_cols = st.columns(3)
-                                    info_cols[0].info(f"**Keyword:** {time_compare_keyword}")
-                                    info_cols[1].info(f"**Start Date:** {start_date} ({len(start_data)} URLs)")
-                                    info_cols[2].info(f"**End Date:** {end_date} ({len(end_data)} URLs)")
-                                    
-                                    # Sort data by position (ascending)
-                                    start_data_sorted = start_data.sort_values(by='Position', ascending=True)
-                                    end_data_sorted = end_data.sort_values(by='Position', ascending=True)
-                                    
-                                    # Extract URLs and positions
-                                    start_list = start_data_sorted[['Results', 'Position']].values.tolist()
-                                    end_list = end_data_sorted[['Results', 'Position']].values.tolist()
-                                    
-                                    # Build the position changes data
-                                    all_urls = set()
-                                    start_pos_map = {}
-                                    end_pos_map = {}
-                                    
-                                    for url, pos in start_list:
-                                        all_urls.add(url)
-                                        start_pos_map[url] = pos
-                                    
-                                    for url, pos in end_list:
-                                        all_urls.add(url)
-                                        end_pos_map[url] = pos
-                                    
-                                    # Build the position changes table
-                                    position_changes = []
-                                    for url in all_urls:
-                                        start_pos = start_pos_map.get(url, None)
-                                        end_pos = end_pos_map.get(url, None)
-                                        
-                                        if start_pos is not None or end_pos is not None:
-                                            row = {
-                                                'url': url,
-                                                'domain': get_domain(url),
-                                                'start_position': start_pos,
-                                                'end_position': end_pos
-                                            }
-                                            
-                                            if start_pos is not None and end_pos is not None:
-                                                change = end_pos - start_pos
-                                                if change < 0:
-                                                    row['change_text'] = f"↑ {abs(change):.1f} (improved)"
-                                                    row['status'] = 'improved'
-                                                    row['change'] = change  # Store numerical change for sorting
-                                                elif change > 0:
-                                                    row['change_text'] = f"↓ {change:.1f} (declined)"
-                                                    row['status'] = 'declined'
-                                                    row['change'] = change  # Store numerical change for sorting
-                                                else:
-                                                    row['change_text'] = "No change"
-                                                    row['status'] = 'unchanged'
-                                                    row['change'] = 0  # Store numerical change for sorting
-                                            else:
-                                                if start_pos is None:
-                                                    row['change_text'] = "New"
-                                                    row['status'] = 'new'
-                                                    row['change'] = 0  # Placeholder for new entries
-                                                else:
-                                                    row['change_text'] = "Dropped"
-                                                    row['status'] = 'dropped'
-                                                    row['change'] = 100  # Placeholder for dropped entries, high value to sort at end
-                                            
-                                            position_changes.append(row)
-                                    
-                                    # Sort by status and position change
-                                    position_changes.sort(key=lambda x: (
-                                        0 if x['status'] == 'improved' else
-                                        1 if x['status'] == 'declined' else
-                                        2 if x['status'] == 'new' else
-                                        3 if x['status'] == 'dropped' else 4,
-                                        x.get('change', 0)  # Secondary sort by numerical change
-                                    ))
-                                    
-                                    # Display results
-                                    col1, col2 = st.columns(2)
-                                    
-                                    with col1:
-                                        st.subheader("Start Date Rankings")
-                                        start_df = pd.DataFrame([
-                                            {'Rank': i+1, 'URL': url, 'Position': pos}
-                                            for i, (url, pos) in enumerate(start_list)
-                                        ])
-                                        st.dataframe(start_df, use_container_width=True)
-                                    
-                                    with col2:
-                                        st.subheader("End Date Rankings")
-                                        end_df = pd.DataFrame([
-                                            {'Rank': i+1, 'URL': url, 'Position': pos}
-                                            for i, (url, pos) in enumerate(end_list)
-                                        ])
-                                        st.dataframe(end_df, use_container_width=True)
-                                    
-                                    st.subheader("Position Changes")
-                                    changes_df = pd.DataFrame(position_changes)
-                                    
-                                    # Function to color rows based on status
-                                    def highlight_status(val):
-                                        if val == 'improved':
-                                            return 'background-color: lightgreen'
-                                        elif val == 'declined':
-                                            return 'background-color: lightsalmon'
-                                        elif val == 'new':
-                                            return 'background-color: lightblue'
-                                        elif val == 'dropped':
-                                            return 'background-color: #FFCCCB'  # Light red
-                                        return ''
-                                    
-                                    # Apply styling and display
-                                    styled_df = changes_df.style.applymap(
-                                        highlight_status, subset=['status']
-                                    )
-                                    
-                                    st.dataframe(styled_df, use_container_width=True)
-                                    
-                                    # Visualization of position changes
-                                    if len(position_changes) > 0:
-                                        st.subheader("Position Change Visualization")
-                                        
-                                        # Prepare data for visualization
-                                        viz_data = []
-                                        for row in position_changes:
-                                            if 'status' in row and row['status'] in ('improved', 'declined', 'unchanged'):
-                                                viz_data.append({
-                                                    'url': row['url'],
-                                                    'domain': row['domain'],
-                                                    'change': row['end_position'] - row['start_position'] 
-                                                        if row['start_position'] is not None and row['end_position'] is not None 
-                                                        else 0
-                                                })
-                                        
-                                        if viz_data:
-                                            viz_df = pd.DataFrame(viz_data)
-                                            
-                                            # Sort by change amount for better visualization
-                                            viz_df = viz_df.sort_values('change')
-                                            
-                                            # Create a more readable domain-based label
-                                            viz_df['label'] = viz_df['domain'].apply(lambda x: x[:20] + '...' if len(x) > 20 else x)
-                                            
-                                            fig = px.bar(
-                                                viz_df,
-                                                x='change',
-                                                y='label',
-                                                color='change',
-                                                color_continuous_scale='RdBu_r',  # Blue for negative (improvement), Red for positive (decline)
-                                                title=f"Position Changes ({start_date} to {end_date})",
-                                                hover_data=['url', 'change'],
-                                                labels={'change': 'Position Change', 'label': 'Domain', 'url': 'URL'}
-                                            )
-                                            
-                                            fig.update_layout(
-                                                xaxis_title="Position Change (negative is better)",
-                                                yaxis_title="Domain",
-                                                height=max(400, 30 * len(viz_df)),  # Dynamic height based on number of entries
-                                                yaxis={'categoryorder': 'array', 'categoryarray': viz_df['label'].tolist()}
-                                            )
-                                            
-                                            # Add a vertical line at x=0
-                                            fig.add_shape(
-                                                type="line",
-                                                x0=0,
-                                                y0=-0.5,
-                                                x1=0,
-                                                y1=len(viz_df) - 0.5,
-                                                line=dict(color="black", width=1, dash="dash")
-                                            )
-                                            
-                                            st.plotly_chart(fig, use_container_width=True)
-                                            
-                                            # Show summary statistics
-                                            st.subheader("Summary Statistics")
-                                            
-                                            improved_count = len([r for r in position_changes if r.get('status') == 'improved'])
-                                            declined_count = len([r for r in position_changes if r.get('status') == 'declined'])
-                                            unchanged_count = len([r for r in position_changes if r.get('status') == 'unchanged'])
-                                            new_count = len([r for r in position_changes if r.get('status') == 'new'])
-                                            dropped_count = len([r for r in position_changes if r.get('status') == 'dropped'])
-                                            
-                                            stats_cols = st.columns(5)
-                                            stats_cols[0].metric("Improved", improved_count)
-                                            stats_cols[1].metric("Declined", declined_count)
-                                            stats_cols[2].metric("Unchanged", unchanged_count)
-                                            stats_cols[3].metric("New", new_count)
-                                            stats_cols[4].metric("Dropped", dropped_count)
-                                            
-                                            # Calculate average change
-                                            changes_only = [r for r in position_changes if r.get('status') in ('improved', 'declined')]
-                                            if changes_only:
-                                                avg_change = sum(r['end_position'] - r['start_position'] for r in changes_only) / len(changes_only)
-                                                st.metric("Average Position Change", f"{avg_change:.2f}", 
-                                                         delta=f"{-avg_change:.2f}" if avg_change < 0 else f"{avg_change:.2f}")
-                            else:
-                                st.info("Please select start and end dates for comparison")
-                        else:
-                            st.warning(f"No dates found for keyword '{time_compare_keyword}'")
                     else:
-                        st.warning("No date column found in the data")
-            else:
-                st.info("Please select a keyword to analyze over time")
-        else:
-            st.warning("Keyword column not found in data")
+                        st.info("No position changes data available.")
 
-if __name__ == "__main__":
+            except Exception as e:
+                st.error(f"Error processing time comparison: {str(e)}")
+
+# Run the Streamlit app
+if __name__ == '__main__':
     main()
